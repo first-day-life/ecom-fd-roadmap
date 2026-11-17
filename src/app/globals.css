@@ -478,3 +478,11 @@ button.crumb:hover { background: #f3f4f6; color: #111827; }
 @media (max-width: 900px) { .backlog-cols { flex-direction: column; } .backlog-col, .backlog-col-collapsed { flex-basis: auto; width: 100%; } .backlog-col-collapsed { flex-direction: row; min-height: 0; padding: 10px 12px; } .backlog-col-vertical { writing-mode: horizontal-tb; } }
 .filters .filter-select { width: 190px; max-width: 190px; text-overflow: ellipsis; }
 .filters .filter-input { width: 220px; }
+
+/* Priority pill */
+.prio { display: inline-flex; align-items: center; gap: 3px; font-size: 10px; font-weight: 700; border-radius: 4px; padding: 1px 6px; white-space: nowrap; }
+.prio-urgent { background: #fee2e2; color: #b91c1c; }
+.prio-high { background: #ffedd5; color: #c2410c; }
+.prio-normal { background: #e0ecff; color: #1d4ed8; }
+.prio-low { background: #f3f4f6; color: #6b7280; }
+.prio-none { background: transparent; color: #c0c4cc; font-weight: 500; }

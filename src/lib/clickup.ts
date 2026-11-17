@@ -157,7 +157,7 @@ async function loadList(id: string, idx: number): Promise<{ ctx: ListCtx; member
     .map(label => ({ label, field: findField(raw, [label]) }))
     .filter((x): x is { label: string; field: RawField } => !!x.field && ['drop_down', 'labels', 'users'].includes(x.field.type));
   const statuses: StatusOption[] = (list.statuses || []).map((s: any) => ({
-    name: s.status, color: s.color || '#9ca3af', type: s.type, done: s.type === 'closed' || s.type === 'done',
+    name: s.status, color: s.color || '#9ca3af', type: s.type, done: isDoneStatus(s.type, s.status),
   }));
   const rm = fields.roadmapMonth;
   const monthOptions = rm && ['drop_down', 'labels'].includes(rm.type)
@@ -251,6 +251,10 @@ function dateToMs(d: string): number | null {
   return Date.UTC(y, m - 1, day, 17, 0, 0);
 }
 
+/** Closed/done status types, plus custom statuses that are named as done (e.g. "done (this sprint)"). */
+const isDoneStatus = (type: string | undefined, name: string | undefined) =>
+  type === 'closed' || type === 'done' || /\b(done|complete|completed|shipped|launched)\b/i.test(name || '');
+
 const PRIORITY_FROM_CU: Record<string, string> = { urgent: 'Urgent', high: 'High', normal: 'Normal', low: 'Low' };
 const PRIORITY_TO_CU: Record<string, number> = { Urgent: 1, High: 2, Normal: 3, Low: 4 };
 
@@ -332,7 +336,7 @@ function mapTask(task: any, l: ListCtx): Initiative {
     listName: l.meta.name,
     status: task.status?.status || '',
     statusColor: task.status?.color || '#9ca3af',
-    done: t === 'closed' || t === 'done',
+    done: isDoneStatus(t, task.status?.status),
     priority: PRIORITY_FROM_CU[task.priority?.priority] || '',
     pillar: fieldText(l.fields.pillar, task),
     bigSwing: rawValue(l.fields.bigSwing, task) === true || rawValue(l.fields.bigSwing, task) === 'true',

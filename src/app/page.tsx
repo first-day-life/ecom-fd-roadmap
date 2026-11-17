@@ -328,7 +328,8 @@ function MonthView({ monthKey, items, lists, onUpdate, onOpen, onAdd }: {
   const traySource = tray === 'month' ? monthOnly : tray === 'unplanned' ? unplanned : items.filter(i => !trayOpenOnly || !i.done);
   const trayItems = traySource
     .filter(i => !trayList || i.listId === trayList)
-    .filter(i => !trayQuery || i.name.toLowerCase().includes(trayQuery.toLowerCase()));
+    .filter(i => !trayQuery || i.name.toLowerCase().includes(trayQuery.toLowerCase()))
+    .sort(makeSorter('smart', lists));
 
   // Preview of a bar while dragging, in whole weeks
   const preview = (i: Initiative) => {
@@ -532,6 +533,75 @@ const FIELD_EMOJI: Record<string, string> = {
 };
 const fieldEmoji = (label: string) => FIELD_EMOJI[label] || '🏷️';
 
+// ---------------------------------------------------------------------------
+// Sorting — "Highest priority first" is the default everywhere items are listed
+// ---------------------------------------------------------------------------
+
+type SortKey = 'smart' | 'status' | 'date' | 'newest' | 'oldest' | 'name';
+const SORT_LABELS: Record<SortKey, string> = {
+  smart: '🔥 Highest priority first',
+  status: '📍 Furthest along first',
+  date: '📅 Soonest scheduled',
+  newest: '🆕 Newest created',
+  oldest: '🕰️ Oldest created',
+  name: '🔤 A → Z',
+};
+const PRIORITY_RANK: Record<string, number> = { Urgent: 0, High: 1, Normal: 2, Low: 3 };
+const READY_RANK: Record<string, number> = { 'ready': 0, 'in progress': 1, 'not ready to start': 3 };
+const SIZE_RANK: Record<string, number> = { XL: 0, L: 1, M: 2, S: 3, XS: 4 };
+
+/**
+ * Builds a comparator. "smart" (default) orders, within each list:
+ *   1. open before done
+ *   2. ClickUp priority: Urgent → High → Normal → Low → none
+ *   3. furthest-along status (e.g. qa / in-progress before to do / backlog)
+ *   4. 🚦 Ready to Start?: Ready → in progress → unset → Not Ready
+ *   5. 💥 Impact: XL → XS (Idea Parking Lot)
+ *   6. has a 🪨 ROCK before no ROCK
+ *   7. soonest on the roadmap, then newest created
+ */
+function makeSorter(sort: SortKey, lists: ListMeta[]) {
+  const statusIdx = (i: Initiative) => {
+    const l = lists.find(x => x.id === i.listId);
+    const idx = l ? l.statuses.findIndex(s => s.name === i.status) : -1;
+    return idx < 0 ? 0 : idx;
+  };
+  const when = (i: Initiative) => spanOf(i)?.start || (i.roadmapMonth ? i.roadmapMonth + '-15' : '9999-99');
+  const pri = (i: Initiative) => PRIORITY_RANK[i.priority] ?? 4;
+  const ready = (i: Initiative) => READY_RANK[(i.attrs?.['Ready to Start?']?.[0] || '').toLowerCase()] ?? 2;
+  const impact = (i: Initiative) => SIZE_RANK[i.attrs?.['Impact']?.[0] || ''] ?? 5;
+  const rock = (i: Initiative) => (i.attrs?.['ROCK']?.length ? 0 : 1);
+  const created = (i: Initiative) => i.createdAt || '';
+
+  return (a: Initiative, b: Initiative): number => {
+    const done = Number(a.done) - Number(b.done);
+    switch (sort) {
+      case 'name': return a.name.localeCompare(b.name);
+      case 'newest': return done || created(b).localeCompare(created(a));
+      case 'oldest': return done || created(a).localeCompare(created(b));
+      case 'date': return done || when(a).localeCompare(when(b)) || pri(a) - pri(b);
+      case 'status': return done || statusIdx(b) - statusIdx(a) || pri(a) - pri(b);
+      default:
+        return done
+          || pri(a) - pri(b)
+          || statusIdx(b) - statusIdx(a)
+          || ready(a) - ready(b)
+          || impact(a) - impact(b)
+          || rock(a) - rock(b)
+          || when(a).localeCompare(when(b))
+          || created(b).localeCompare(created(a));
+    }
+  };
+}
+
+const PRIORITY_FLAG: Record<string, string> = { Urgent: '🔴', High: '🟠', Normal: '🔵', Low: '⚪' };
+
+function PriorityPill({ p }: { p: string }) {
+  if (!p) return <span className="prio prio-none" title="No priority set in ClickUp">— no priority</span>;
+  return <span className={`prio prio-${p.toLowerCase()}`} title={`ClickUp priority: ${p}`}>{PRIORITY_FLAG[p]} {p}</span>;
+}
+
+const SORT_KEY = 'roadmap.backlog.sort';
 const COLLAPSE_KEY = 'roadmap.backlog.collapsed';
 const CARD_ATTRS = ['ROCK', 'TACTIC', 'Task Category'];   // shown as chips on backlog cards
 
@@ -543,6 +613,12 @@ function BacklogView({ items, meta, onOpen, onSchedule }: {
   const nowYm = todayStr().slice(0, 7);
   const months = Array.from({ length: 12 }, (_, i) => shiftMonth(nowYm, i));
   const [show, setShow] = useState<'unplanned' | 'open' | 'all'>('open');
+  const [sort, setSortState] = useState<SortKey>('smart');
+  useEffect(() => {
+    try { const v = localStorage.getItem(SORT_KEY) as SortKey | null; if (v && v in SORT_LABELS) setSortState(v); } catch { /* ignore */ }
+  }, []);
+  const setSort = (v: SortKey) => { setSortState(v); try { localStorage.setItem(SORT_KEY, v); } catch { /* ignore */ } };
+  const sorter = useMemo(() => makeSorter(sort, lists), [sort, lists]);
 
   // Collapsed columns — Current Sprint starts collapsed; choice remembered per browser
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set(lists.filter(l => /current sprint/i.test(l.name)).map(l => l.id)));
@@ -586,15 +662,17 @@ function BacklogView({ items, meta, onOpen, onSchedule }: {
           <button className={show === 'open' ? 'active' : ''} onClick={() => setShow('open')}>All open</button>
           <button className={show === 'all' ? 'active' : ''} onClick={() => setShow('all')}>Everything</button>
         </div>
+        <select className={`filter-select ${sort !== 'smart' ? 'filter-on' : ''}`} value={sort} onChange={e => setSort(e.target.value as SortKey)} title="Sort cards within each list"
+          style={{ width: 'auto', maxWidth: 'none' }}>
+          {(Object.keys(SORT_LABELS) as SortKey[]).map(k => <option key={k} value={k}>Sort: {SORT_LABELS[k]}</option>)}
+        </select>
         <span className="month-window-range">{visible.length} items</span>
         <span className="month-only-hint" style={{ margin: 0 }}>Narrow down with 🪨 ROCK, 🎯 TACTIC, 🗂️ Task Category, 📍 status and more above — pick a 📋 list to see only its filters. Click a column header to collapse it.</span>
       </div>
 
       <div className="backlog-cols">
         {lists.map(l => {
-          const colItems = visible
-            .filter(i => i.listId === l.id)
-            .sort((a, b) => (spanOf(a)?.start || a.roadmapMonth || '9999').localeCompare(spanOf(b)?.start || b.roadmapMonth || '9999'));
+          const colItems = visible.filter(i => i.listId === l.id).sort(sorter);
           if (collapsed.has(l.id)) {
             return (
               <button key={l.id} className="backlog-col backlog-col-collapsed" onClick={() => toggleCol(l.id)} title={`Expand ${l.name}`}>
@@ -622,6 +700,7 @@ function BacklogView({ items, meta, onOpen, onSchedule }: {
                   >
                     <button className="backlog-card-name" onClick={() => onOpen(i.id)} title={i.name}>{i.name}</button>
                     <div className="backlog-card-meta">
+                      <PriorityPill p={i.priority} />
                       <span className="status-text"><StatusDot color={i.statusColor} /> {i.status}</span>
                       <span className={`backlog-place ${sourceOf(i) === 'none' ? 'is-unplanned' : ''}`}>{placementLabel(i)}</span>
                       <Avatars owners={i.owners} />
