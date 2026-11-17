@@ -12,12 +12,11 @@ interface Request {
   submittedBy: string;
   notes: string;
   submittedAt: string;
+  url: string;
 }
 
-const PILLAR_DESC: Record<string, string> = { CVR: 'Conversion Rate', AOV: 'Avg Order Value', LTV: 'Subscriber Lifetime Value' };
-
-function pillarClass(p: string) { return p === 'CVR' ? 'cvr' : p === 'AOV' ? 'aov' : 'ltv'; }
-function priorityClass(p: string) { return p === 'High' ? 'high' : p === 'Medium' ? 'med' : 'low'; }
+function pillarClass(p: string) { return p === 'CVR' ? 'cvr' : p === 'AOV' ? 'aov' : p === 'LTV' ? 'ltv' : 'planned'; }
+function priorityClass(p: string) { return p === 'Urgent' || p === 'High' ? 'high' : p === 'Normal' ? 'med' : 'low'; }
 
 function timeAgo(iso: string): string {
   if (!iso) return '';
@@ -92,7 +91,7 @@ export default function RequestsPage() {
   };
 
   const handleReject = async (id: string) => {
-    if (!confirm('Reject this request? It will be permanently removed.')) return;
+    if (!confirm('Reject this request? The ClickUp task will be archived (restorable from ClickUp).')) return;
     setActionId(id);
     try {
       const res = await fetch(`/api/requests/${id}/approve`, {
@@ -191,15 +190,16 @@ export default function RequestsPage() {
                 <div style={{ flex: 1 }}>
                   <div style={{ fontSize: 15, fontWeight: 600, color: '#111827', marginBottom: 8 }}>{req.name}</div>
                   <div className="card-meta" style={{ marginBottom: 8 }}>
-                    <span className={`pill pill-${pillarClass(req.pillar)}`}>{req.pillar}</span>
-                    <span className={`pill pill-${priorityClass(req.priority)}`}>{req.priority}</span>
-                    <span className="pill pill-planned">{req.month}</span>
+                    {req.pillar && <span className={`pill pill-${pillarClass(req.pillar)}`}>{req.pillar}</span>}
+                    {req.priority && <span className={`pill pill-${priorityClass(req.priority)}`}>{req.priority}</span>}
+                    {req.month && <span className="pill pill-planned">{req.month}</span>}
+                    {req.url && <a className="pill pill-planned" href={req.url} target="_blank" rel="noreferrer" style={{ textDecoration: 'none' }}>ClickUp ↗</a>}
                   </div>
                   {req.notes && (
                     <p style={{ fontSize: 12, color: '#6b7280', lineHeight: 1.6, marginBottom: 8 }}>{req.notes}</p>
                   )}
                   <div style={{ fontSize: 11, color: '#9ca3af' }}>
-                    Submitted by <strong style={{ color: '#6b7280' }}>{req.submittedBy}</strong> · {timeAgo(req.submittedAt)}
+                    Submitted by <strong style={{ color: '#6b7280' }}>{req.submittedBy || 'unknown'}</strong> · {timeAgo(req.submittedAt)}
                   </div>
                 </div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 6, flexShrink: 0 }}>

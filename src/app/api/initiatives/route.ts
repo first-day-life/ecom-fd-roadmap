@@ -1,10 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getInitiatives, addInitiative } from '@/lib/sheets';
+import { getInitiatives, getMeta, addInitiative } from '@/lib/clickup';
 
+export const dynamic = 'force-dynamic';
+
+// GET — roadmap items plus the list metadata (statuses, pillars, members…) in one round trip
 export async function GET() {
   try {
-    const items = await getInitiatives();
-    return NextResponse.json(items);
+    const [items, meta] = await Promise.all([getInitiatives(), getMeta()]);
+    return NextResponse.json({ items, meta });
   } catch (err: any) {
     return NextResponse.json({ error: err.message }, { status: 500 });
   }
@@ -13,23 +16,10 @@ export async function GET() {
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { name, pillar, month, status, priority, owner, notes, bigSwing } = body;
-
-    if (!name?.trim()) {
+    if (!body.name?.trim()) {
       return NextResponse.json({ error: 'Name is required' }, { status: 400 });
     }
-
-    const item = await addInitiative({
-      name: name.trim(),
-      pillar: pillar || 'CVR',
-      month: month || 'April',
-      status: status || 'Planned',
-      priority: priority || 'High',
-      owner: owner || '',
-      notes: notes || '',
-      bigSwing: bigSwing || '',
-    });
-
+    const item = await addInitiative({ ...body, name: body.name.trim() });
     return NextResponse.json(item, { status: 201 });
   } catch (err: any) {
     return NextResponse.json({ error: err.message }, { status: 500 });

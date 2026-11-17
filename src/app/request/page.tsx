@@ -1,17 +1,27 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import Link from 'next/link';
+import { monthLabel, shiftMonth, todayStr } from '@/lib/dates';
 
-const PILLARS = ['CVR', 'AOV', 'LTV'];
-const MONTHS = ['April', 'May', 'June'];
-const PRIORITIES = ['High', 'Medium', 'Low'];
-const PILLAR_DESC: Record<string, string> = { CVR: 'Conversion Rate', AOV: 'Avg Order Value', LTV: 'Subscriber Lifetime Value' };
+const PRIORITIES = ['Urgent', 'High', 'Normal', 'Low'];
+
+interface PublicMeta { pillars: { id: string; name: string }[]; monthOptions: string[] }
 
 export default function RequestPage() {
-  const [form, setForm] = useState({
-    name: '', pillar: 'CVR', month: 'April', priority: 'Medium', submittedBy: '', notes: '',
-  });
+  const blank = { name: '', pillar: '', month: '', priority: 'Normal', submittedBy: '', notes: '' };
+  const [form, setForm] = useState(blank);
+  const [meta, setMeta] = useState<PublicMeta | null>(null);
+
+  useEffect(() => {
+    fetch('/api/meta').then(r => r.json()).then(d => { if (!d.error) setMeta(d); }).catch(() => {});
+  }, []);
+
+  // Month choices: the ClickUp dropdown's options from this month on, else the next 12 months
+  const nowYm = todayStr().slice(0, 7);
+  const months = meta?.monthOptions.length
+    ? meta.monthOptions.filter(m => m >= nowYm)
+    : Array.from({ length: 12 }, (_, i) => shiftMonth(nowYm, i));
   const [submitting, setSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
   const [error, setError] = useState('');
@@ -55,7 +65,7 @@ export default function RequestPage() {
               Your initiative request has been submitted for review. An approver will review it and add it to the roadmap if approved.
             </p>
             <div style={{ display: 'flex', gap: 8, justifyContent: 'center' }}>
-              <button className="btn btn-ghost" onClick={() => { setSubmitted(false); setForm({ name: '', pillar: 'CVR', month: 'April', priority: 'Medium', submittedBy: form.submittedBy, notes: '' }); }}>Submit Another</button>
+              <button className="btn btn-ghost" onClick={() => { setSubmitted(false); setForm({ ...blank, submittedBy: form.submittedBy }); }}>Submit Another</button>
               <Link href="/" className="btn btn-primary">View Roadmap</Link>
             </div>
           </div>
@@ -72,7 +82,7 @@ export default function RequestPage() {
         </div>
         <h1 style={{ fontSize: 20, fontWeight: 700, margin: '16px 0 4px' }}>Request an Initiative</h1>
         <p style={{ fontSize: 13, color: '#6b7280', marginBottom: 24 }}>
-          Submit a new initiative idea for the Q2 roadmap. An approver will review your request before it gets added.
+          Submit a new initiative idea for the roadmap. It goes into ClickUp for review, and an approver adds it to the roadmap if it’s approved.
         </p>
 
         {error && (
@@ -93,16 +103,20 @@ export default function RequestPage() {
           </div>
 
           <div className="form-row">
-            <div className="form-group">
-              <label className="form-label">Pillar</label>
-              <select className="form-select" value={form.pillar} onChange={e => set('pillar', e.target.value)}>
-                {PILLARS.map(p => <option key={p} value={p}>{p} — {PILLAR_DESC[p]}</option>)}
-              </select>
-            </div>
+            {meta && meta.pillars.length > 0 && (
+              <div className="form-group">
+                <label className="form-label">Pillar</label>
+                <select className="form-select" value={form.pillar} onChange={e => set('pillar', e.target.value)}>
+                  <option value="">—</option>
+                  {meta.pillars.map(p => <option key={p.id} value={p.name}>{p.name}</option>)}
+                </select>
+              </div>
+            )}
             <div className="form-group">
               <label className="form-label">Suggested Month</label>
               <select className="form-select" value={form.month} onChange={e => set('month', e.target.value)}>
-                {MONTHS.map(m => <option key={m}>{m}</option>)}
+                <option value="">No preference</option>
+                {months.map(m => <option key={m} value={m}>{monthLabel(m)}</option>)}
               </select>
             </div>
           </div>

@@ -2,8 +2,8 @@ import type { Metadata } from 'next';
 import './globals.css';
 
 export const metadata: Metadata = {
-  title: 'firstday.com — Q2 2026 Ecommerce Roadmap',
-  description: 'Q2 2026 Ecommerce Roadmap powered by Google Sheets',
+  title: 'firstday.com — Ecommerce Roadmap',
+  description: 'Ecommerce roadmap synced with ClickUp',
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
