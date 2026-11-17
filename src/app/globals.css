@@ -492,7 +492,7 @@ button.crumb:hover { background: #f3f4f6; color: #111827; }
 .auth-email { font-size: 12px; color: #6b7280; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* Live Intelligems tests */
-.tests-stats { max-width: 640px; margin-bottom: 12px; }
+.tests-stats { max-width: 800px; margin-bottom: 12px; grid-template-columns: repeat(5, 1fr); }
 .tests-stats div { background: #fff; border: 1px solid #e5e7eb; }
 .tests-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(460px, 1fr)); gap: 12px; }
 @media (max-width: 560px) { .tests-grid { grid-template-columns: 1fr; } }
@@ -518,3 +518,24 @@ button.crumb:hover { background: #f3f4f6; color: #111827; }
 .tests-empty h3 { font-size: 16px; margin-bottom: 8px; }
 .tests-empty p { font-size: 13px; color: #374151; line-height: 1.6; }
 .tests-empty code { background: #f3f4f6; padding: 1px 5px; border-radius: 4px; }
+.test-link { margin-left: auto; font-weight: 600; color: #4f6ef7; text-decoration: none; }
+.test-link:hover { text-decoration: underline; }
+.test-result { margin-top: 4px; border-radius: 10px; padding: 10px 12px; background: #f8f9fb; border: 1px solid #eef0f3; font-size: 12px; }
+.res-winner { background: #ecfdf5; border-color: #a7f3d0; }
+.res-loser { background: #fef2f2; border-color: #fecaca; }
+.res-mixed { background: #fffbeb; border-color: #fcd34d; }
+.res-headline { font-size: 13px; font-weight: 700; color: #111827; margin-bottom: 8px; }
+.res-table { width: 100%; border-collapse: collapse; margin-bottom: 8px; }
+.res-table th { text-align: left; font-size: 10px; text-transform: uppercase; letter-spacing: 0.4px; color: #9ca3af; font-weight: 600; padding: 2px 6px; }
+.res-table td { padding: 3px 6px; border-top: 1px solid rgba(0,0,0,0.05); font-variant-numeric: tabular-nums; }
+.res-table tr.sig-win td { color: #047857; font-weight: 600; }
+.res-table tr.sig-lose td { color: #b91c1c; font-weight: 600; }
+.res-orders { display: flex; flex-direction: column; gap: 4px; margin-bottom: 6px; }
+.res-order-row { display: grid; grid-template-columns: 96px 1fr auto auto; gap: 8px; align-items: center; }
+.res-order-row .progress-bar-bg { height: 5px; }
+.res-dim { color: #9ca3af; }
+.res-reasons { margin: 4px 0 6px 16px; color: #374151; line-height: 1.5; }
+.res-foot { display: flex; flex-wrap: wrap; gap: 14px; color: #6b7280; font-size: 11px; }
+.res-foot .neg { color: #b91c1c; } .res-foot .pos { color: #047857; }
+.res-none { color: #6b7280; }
+.res-nowrap { white-space: nowrap; }

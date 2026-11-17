@@ -742,11 +742,71 @@ function BacklogView({ items, meta, onOpen, onSchedule }: {
 // Live Intelligems tests — how long each A/B test has been running (read-only)
 // ---------------------------------------------------------------------------
 
+type TMetric = { value: number | null; uplift: number | null; p2bc: number | null; sig: 'win' | 'lose' | null; daysToSig: number | null };
+interface TestResults {
+  call: 'winner' | 'loser' | 'mixed' | 'not_ready' | 'no_data';
+  headline: string; reasons: string[]; etaDays: number | null; igVerdict: string | null; estMonthlyImpact: number | null; error?: string;
+  variants: Array<{ name: string; isControl: boolean; orders: number; ordersPerDay: number; daysTo300: number | null; metrics: Partial<Record<'rpv' | 'aov' | 'cvr', TMetric>> }>;
+}
 interface LiveTest {
   id: string; name: string; status: 'started' | 'paused'; type: string; typeLabel: string;
-  startedAt: string; pausedAt: string; daysRunning: number;
+  startedAt: string; pausedAt: string; daysRunning: number; url: string;
   variations: Array<{ name: string; percentage: number; isControl: boolean }>;
   estimatedDays: { low: number | null; high: number | null } | null;
+  results: TestResults | null;
+}
+
+const IG_VERDICT: Record<string, string> = {
+  strong_win: 'strong win', directional_win: 'directional win', directional_loss: 'directional loss', strong_loss: 'strong loss',
+  mixed_signals: 'mixed signals', not_ready: 'not ready', error: 'error',
+};
+
+function ResultsBlock({ r }: { r: TestResults }) {
+  if (r.error) return <div className="test-result res-none">Results unavailable: {r.error}</div>;
+  const control = r.variants.find(v => v.isControl);
+  const challengers = r.variants.filter(v => !v.isControl);
+  const fmtUp = (u: number | null) => (u == null ? '—' : `${u >= 0 ? '+' : ''}${(u * 100).toFixed(1)}%`);
+  const fmtP = (p: number | null) => (p == null ? '—' : `${(p * 100).toFixed(p > 0.99 || p < 0.01 ? 1 : 0)}%`);
+  return (
+    <div className={`test-result res-${r.call}`}>
+      <div className="res-headline">{r.headline}</div>
+      {challengers.map(v => (
+        <div key={v.name} className="res-variant">
+          <table className="res-table">
+            <thead><tr><th>{challengers.length > 1 ? v.name : 'Variant vs control'}</th><th>Lift</th><th title="Chance the variant beats control">Chance to beat</th><th title="Reached 95%, or estimated days until it could">95%?</th></tr></thead>
+            <tbody>
+              {(['rpv', 'aov', 'cvr'] as const).map(k => {
+                const m = v.metrics[k];
+                if (!m) return null;
+                return (
+                  <tr key={k} className={m.sig ? `sig-${m.sig}` : ''}>
+                    <td>{k.toUpperCase()}</td>
+                    <td>{fmtUp(m.uplift)}</td>
+                    <td>{fmtP(m.p2bc)}</td>
+                    <td className="res-nowrap">{m.sig === 'win' ? '✅ better' : m.sig === 'lose' ? '❌ worse' : m.daysToSig ? (m.daysToSig > 180 ? '>6 mo' : `~${m.daysToSig}d`) : '—'}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+          <div className="res-orders">
+            {[v, ...(control ? [control] : [])].map(x => (
+              <div key={x.name} className="res-order-row">
+                <span>{x.isControl ? 'Control' : 'Variant'} orders</span>
+                <div className="progress-bar-bg"><div className="progress-bar-fill" style={{ width: Math.min(100, (x.orders / 300) * 100) + '%', background: x.orders >= 300 ? undefined : '#f59e0b' }} /></div>
+                <strong>{x.orders.toLocaleString()}</strong><span className="res-dim">/ 300 · {x.ordersPerDay}/day</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      ))}
+      <ul className="res-reasons">{r.reasons.map((x, i) => <li key={i}>{x}</li>)}</ul>
+      <div className="res-foot">
+        {r.igVerdict && <span>Intelligems’ own read: <strong>{IG_VERDICT[r.igVerdict] || r.igVerdict.replace(/_/g, ' ')}</strong></span>}
+        {r.estMonthlyImpact != null && <span>Est. monthly impact: <strong className={r.estMonthlyImpact < 0 ? 'neg' : 'pos'}>{r.estMonthlyImpact < 0 ? '−' : '+'}${Math.abs(Math.round(r.estMonthlyImpact)).toLocaleString()}</strong></span>}
+      </div>
+    </div>
+  );
 }
 
 /** Age bands for a running test: fresh < 14d, maturing < 28d, long-running ≥ 28d. */
@@ -801,6 +861,7 @@ function TestsView() {
             {t.pausedAt && <span>· Paused {new Date(t.pausedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</span>}
             {band === 'over' && <span className="test-flag">⏰ Past estimated length</span>}
             {band === 'long' && <span className="test-flag">⏳ 4+ weeks — time to call it?</span>}
+            {t.url && <a className="test-link" href={t.url} target="_blank" rel="noreferrer">Open in Intelligems ↗</a>}
           </div>
           {est && (est.low || est.high) && (
             <div className="test-est">
@@ -811,6 +872,7 @@ function TestsView() {
           <div className="test-vars">
             {t.variations.map(v => <span key={v.name} className={`test-var ${v.isControl ? 'is-control' : ''}`}>{v.isControl ? '🅰️' : '🅱️'} {v.name} · {v.percentage}%</span>)}
           </div>
+          {t.results && <ResultsBlock r={t.results} />}
         </div>
       </div>
     );
@@ -822,10 +884,11 @@ function TestsView() {
         <div><strong>{live.length}</strong><span>live tests</span></div>
         <div><strong>{avg}</strong><span>avg days running</span></div>
         <div><strong>{longest ? longest.daysRunning : 0}</strong><span>longest (days)</span></div>
+        <div><strong>{live.filter(t => t.results && ['winner', 'loser', 'mixed'].includes(t.results.call)).length}</strong><span>ready to call</span></div>
         <div><strong>{paused.length}</strong><span>paused</span></div>
       </div>
       <p className="month-only-hint" style={{ margin: '0 0 12px' }}>
-        Live A/B tests from Intelligems, longest-running first. 🟢 under 2 weeks · 🟡 2–4 weeks · 🟠 4+ weeks · 🔴 past Intelligems’ estimated test length. Read-only; refreshes every 5 minutes.
+        Live A/B tests from Intelligems, longest-running first. A test can be called when a variant has 300+ orders and RPV, AOV or CVR is at 95% (≥95% or ≤5% chance to beat control). Day estimates assume the current trend holds. 🟢 &lt;2 weeks · 🟡 2–4 weeks · 🟠 4+ weeks · 🔴 past estimated length. Read-only; refreshes every 5 minutes.
       </p>
       {live.length === 0 && <div className="empty-state">No live tests right now.</div>}
       <div className="tests-grid">{live.map(t => <Card key={t.id} t={t} />)}</div>
