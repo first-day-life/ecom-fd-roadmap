@@ -569,3 +569,5 @@ button.tt-chip:disabled { cursor: default; opacity: .8; }
 .tt-edit-ico { margin-left: 4px; opacity: .6; font-size: 10px; }
 .tt-inline { margin-top: 6px; padding: 8px; border-radius: 8px; background: #faf8ff; border: 1px solid #ede9fe; display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
 .tt-inline .tt-editor { width: 100%; }
+.month-drop[role="button"] { cursor: pointer; }
+.month-drop[role="button"]:hover { border-color: #4f6ef7; background: #f7f8ff; }

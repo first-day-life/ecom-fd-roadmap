@@ -287,8 +287,9 @@ type Target = { kind: 'day'; date: string } | { kind: 'week'; start: string; end
 const ScheduleCtx = createContext<(id: string, t: Target) => void>(() => {});
 const DRAG_TYPE = 'text/roadmap-id';
 
-function DropZone({ target, className = '', overClass = 'drop-over', style, children }: {
+function DropZone({ target, className = '', overClass = 'drop-over', style, children, onClick, title }: {
   target: Target; className?: string; overClass?: string; style?: React.CSSProperties; children?: React.ReactNode;
+  onClick?: () => void; title?: string;
 }) {
   const schedule = useContext(ScheduleCtx);
   const [over, setOver] = useState(false);
@@ -296,6 +297,8 @@ function DropZone({ target, className = '', overClass = 'drop-over', style, chil
     <div
       className={`${className} ${over ? overClass : ''}`}
       style={style}
+      title={title}
+      {...(onClick ? { role: 'button', tabIndex: 0, onClick, onKeyDown: (e: React.KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onClick(); } } } : {})}
       onDragOver={e => { if (e.dataTransfer.types.includes(DRAG_TYPE)) { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; if (!over) setOver(true); } }}
       onDragLeave={e => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setOver(false); }}
       onDrop={e => {
@@ -844,9 +847,9 @@ const SORT_KEY = 'roadmap.backlog.sort';
 const COLLAPSE_KEY = 'roadmap.backlog.collapsed';
 const CARD_ATTRS = ['ROCK', 'TACTIC', 'Task Category'];   // shown as chips on backlog cards
 
-function BacklogView({ items, meta, onOpen, onSchedule, onUpdate }: {
+function BacklogView({ items, meta, onOpen, onSchedule, onUpdate, onOpenMonth }: {
   items: Initiative[]; meta: RoadmapMeta; onOpen: (id: string) => void; onSchedule: (id: string, t: Target) => void;
-  onUpdate: (id: string, patch: InitiativeInput) => void;
+  onUpdate: (id: string, patch: InitiativeInput) => void; onOpenMonth: (ym: string) => void;
 }) {
   const [ttEditing, setTtEditing] = useState<string | null>(null);
   const canTarget = (i: Initiative) => !!lists.find(l => l.id === i.listId)?.fields.testTargeting;
@@ -886,7 +889,8 @@ function BacklogView({ items, meta, onOpen, onSchedule, onUpdate }: {
         {months.map(m => {
           const n = items.filter(i => inMonth(i, m)).length;
           return (
-            <DropZone key={m} target={{ kind: 'month', ym: m }} className={`month-drop ${m === nowYm ? 'month-drop-current' : ''}`} overClass="month-drop-over">
+            <DropZone key={m} target={{ kind: 'month', ym: m }} className={`month-drop ${m === nowYm ? 'month-drop-current' : ''}`} overClass="month-drop-over"
+              onClick={() => onOpenMonth(m)} title={`Open ${monthLabel(m)} — or drop a card here to plan it for this month`}>
               <strong>{monthLabel(m, true)}</strong>
               <span>{n} item{n === 1 ? '' : 's'}</span>
             </DropZone>
@@ -894,7 +898,7 @@ function BacklogView({ items, meta, onOpen, onSchedule, onUpdate }: {
         })}
       </div>
       <p className="month-only-hint" style={{ margin: '0 0 12px' }}>
-        Drag a card onto a month to plan it there (sets Roadmap Start/End across that month’s weeks, or moves an already-planned item to the month’s first week),
+        Click a month to open its calendar. Drag a card onto a month to plan it there (sets Roadmap Start/End across that month’s weeks, or moves an already-planned item to the month’s first week),
         or use “Plan for…”. Then open the month and drag it onto a specific week. 🔒 items have their own ClickUp dates and can’t be moved here.
       </p>
 
@@ -1862,7 +1866,7 @@ export default function RoadmapPage() {
         {view === 'tests'
           ? <TestsView data={tests} />
           : view === 'backlog' && meta
-          ? <BacklogView items={filtered} meta={meta} onOpen={setSelectedId} onSchedule={scheduleTo} onUpdate={updateItem} />
+          ? <BacklogView items={filtered} meta={meta} onOpen={setSelectedId} onSchedule={scheduleTo} onUpdate={updateItem} onOpenMonth={m => { setViewState('calendar'); navigate({ from, span, month: m }); }} />
           : view === 'list'
           ? <ListView items={scoped} onOpen={setSelectedId} onToggleDone={toggleDone} />
           : month
