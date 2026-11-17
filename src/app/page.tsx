@@ -78,6 +78,69 @@ const ColorCtx = createContext<Colors>({ colorOf: () => '#cbd5e1', groupOf: () =
 const useColors = () => useContext(ColorCtx);
 
 // ---------------------------------------------------------------------------
+// Test conflicts — two open test tasks that target the same thing at the same time
+// ---------------------------------------------------------------------------
+
+/** A "test" = Task Category "AB Test Launch", or anything in an AB-test list. */
+function isTestItem(i: Initiative): boolean {
+  return (i.attrs?.['Task Category'] || []).some(c => /ab test launch/i.test(c)) || /a\/?b test/i.test(i.listName);
+}
+
+const EVERYTHING = new Set(['sitewide', 'site-wide', 'all', '*', 'global', 'everything']);
+
+/** Split "🧪 Test Targeting" into normalized targets (comma/semicolon/newline separated). */
+function targetsOf(i: Initiative): string[] {
+  return (i.testTargeting || '')
+    .split(/[,;\n]+/)
+    .map(t => t.trim().toLowerCase()
+      .replace(/^https?:\/\/(www\.)?[^/\s]+/, '')   // drop protocol + domain
+      .replace(/[?#].*$/, '')                          // drop query/hash
+      .replace(/\s+/g, ' ')
+      .replace(/(.)\/$/, '$1'))                       // trailing slash
+    .filter(Boolean);
+}
+
+/** Targets two items share: equal, sitewide, or URL paths where one contains the other. */
+function sharedTargets(a: string[], b: string[]): string[] {
+  const out = new Set<string>();
+  for (const x of a) for (const y of b) {
+    if (x === y || EVERYTHING.has(x) || EVERYTHING.has(y)) out.add(x === y ? x : EVERYTHING.has(x) ? y : x);
+    else if (x.startsWith('/') && y.startsWith('/') && (x.startsWith(y + '/') || y.startsWith(x + '/'))) out.add(x.length < y.length ? x : y);
+  }
+  return Array.from(out);
+}
+
+interface Conflict { other: Initiative; shared: string[]; from: string; to: string }
+
+function findConflicts(items: Initiative[]): Map<string, Conflict[]> {
+  const tests = items.filter(i => !i.done && isTestItem(i) && targetsOf(i).length && spanOf(i));
+  const map = new Map<string, Conflict[]>();
+  for (let x = 0; x < tests.length; x++) for (let y = x + 1; y < tests.length; y++) {
+    const a = tests[x], b = tests[y];
+    const sa = spanOf(a)!, sb = spanOf(b)!;
+    if (!overlaps(sa.start, sa.end, sb.start, sb.end)) continue;
+    const shared = sharedTargets(targetsOf(a), targetsOf(b));
+    if (!shared.length) continue;
+    const from = sa.start > sb.start ? sa.start : sb.start;
+    const to = sa.end < sb.end ? sa.end : sb.end;
+    map.set(a.id, [...(map.get(a.id) || []), { other: b, shared, from, to }]);
+    map.set(b.id, [...(map.get(b.id) || []), { other: a, shared, from, to }]);
+  }
+  return map;
+}
+
+const ConflictCtx = createContext<Map<string, Conflict[]>>(new Map());
+const useConflicts = () => useContext(ConflictCtx);
+const conflictText = (cs: Conflict[]) =>
+  cs.map(c => `⚠️ Conflicts with “${c.other.name}” on ${c.shared.join(', ')} (${shortDate(c.from)} – ${shortDate(c.to)})`).join('\n');
+
+function ConflictNote({ id }: { id: string }) {
+  const cs = useConflicts().get(id);
+  if (!cs?.length) return null;
+  return <span className="conflict-badge" title={conflictText(cs)}>⚠️ {cs.length} conflict{cs.length > 1 ? 's' : ''}</span>;
+}
+
+// ---------------------------------------------------------------------------
 // Drag-to-schedule: drop any item chip onto a month, a week or a day
 // ---------------------------------------------------------------------------
 
@@ -305,6 +368,7 @@ function MonthView({ monthKey, items, lists, onUpdate, onOpen, onAdd }: {
   onAdd: (defaults: InitiativeInput) => void;
 }) {
   const { colorOf, groupOf, listColor } = useColors();
+  const conflicts = useConflicts();
   const weeks = useMemo(() => weeksOfMonth(monthKey), [monthKey]);
   const today = todayStr();
   const gridStart = weeks[0][0];
@@ -401,6 +465,23 @@ function MonthView({ monthKey, items, lists, onUpdate, onOpen, onAdd }: {
   return (
     <div className="month-layout">
       <div className="month-view">
+        {(() => {
+          const inMonthConflicts = monthItems.filter(i => conflicts.has(i.id));
+          if (!inMonthConflicts.length) return null;
+          const seen = new Set<string>();
+          const pairs: string[] = [];
+          inMonthConflicts.forEach(i => conflicts.get(i.id)!.forEach(c => {
+            const k = [i.id, c.other.id].sort().join('|');
+            if (seen.has(k)) return; seen.add(k);
+            pairs.push(`“${i.name}” ↔ “${c.other.name}” on ${c.shared.join(', ')} (${shortDate(c.from)} – ${shortDate(c.to)})`);
+          }));
+          return (
+            <div className="conflict-banner">
+              <strong>⚠️ {pairs.length} test conflict{pairs.length > 1 ? 's' : ''} this month</strong> — tests targeting the same page/area overlap:
+              <ul>{pairs.map(p => <li key={p}>{p}</li>)}</ul>
+            </div>
+          );
+        })()}
         <div className="month-view-tools">
           <label className="tray-check"><input type="checkbox" checked={groupByList} onChange={e => setGroupByList(e.target.checked)} /> Group by list</label>
           <span className="month-view-hint">Drag a bar to move it by week · drag its edges to add or remove weeks · drop items from the sidebar onto a week · 🔒 = dates set on the ClickUp task (change them in ClickUp)</span>
@@ -451,14 +532,16 @@ function MonthView({ monthKey, items, lists, onUpdate, onOpen, onAdd }: {
               return (
                 <div
                   key={item.id}
-                  className={`bar ${item.done ? 'bar-done' : ''} ${active ? 'bar-active' : ''} ${locked ? 'bar-locked' : 'bar-soft'} ${clipL ? 'clip-l' : ''} ${clipR ? 'clip-r' : ''}`}
+                  className={`bar ${item.done ? 'bar-done' : ''} ${active ? 'bar-active' : ''} ${locked ? 'bar-locked' : 'bar-soft'} ${clipL ? 'clip-l' : ''} ${clipR ? 'clip-r' : ''} ${conflicts.has(item.id) ? 'bar-conflict' : ''}`}
                   style={{ gridColumn: `${a + 1} / ${b + 2}`, gridRow: idx + 1, '--bar': colorOf(item) } as React.CSSProperties}
                   onPointerDown={ev => begin(ev, item, 'move')}
-                  title={`${item.name} · ${item.listName} · ${item.status}\n${shortDate(s)} – ${shortDate(e)}\n${locked ? '🔒 Dates come from the ClickUp task’s start/due date — change them in ClickUp.' : 'Roadmap dates · drag to move by week, drag edges to resize'}`}
+                  title={`${item.name} · ${item.listName} · ${item.status}\n${shortDate(s)} – ${shortDate(e)}${item.testTargeting ? `\n🧪 Targets: ${item.testTargeting}` : ''}\n${locked ? '🔒 Dates come from the ClickUp task’s start/due date — change them in ClickUp.' : 'Roadmap dates · drag to move by week, drag edges to resize'}${conflicts.has(item.id) ? '\n' + conflictText(conflicts.get(item.id)!) : ''}`}
                 >
                   {!clipL && !locked && <span className="bar-handle bar-handle-l" onPointerDown={ev => begin(ev, item, 'start')} />}
                   {clipL && <span className="bar-arrow">‹</span>}
                   {locked && <span className="bar-lock">🔒</span>}
+                  {conflicts.has(item.id) && <span className="bar-lock" title={conflictText(conflicts.get(item.id)!)}>⚠️</span>}
+                  {isTestItem(item) && !conflicts.has(item.id) && <span className="bar-lock" title={item.testTargeting ? `🧪 Targets: ${item.testTargeting}` : '🧪 A/B test — add Test Targeting in ClickUp to check for conflicts'}>🧪</span>}
                   <StatusDot color={item.statusColor} />
                   <span className="bar-name">{item.name}</span>
                   {item.bigSwing && <span className="chip-swing">★</span>}
@@ -706,6 +789,14 @@ function BacklogView({ items, meta, onOpen, onSchedule }: {
                       <span className={`backlog-place ${sourceOf(i) === 'none' ? 'is-unplanned' : ''}`}>{placementLabel(i)}</span>
                       <Avatars owners={i.owners} />
                     </div>
+                    {(i.testTargeting || isTestItem(i)) && (
+                      <div className="backlog-attrs">
+                        <span className={`attr-chip tt-chip ${i.testTargeting ? '' : 'tt-missing'}`} title={i.testTargeting ? `Test Targeting: ${i.testTargeting}` : 'A/B test with no Test Targeting — add it in ClickUp or the edit panel'}>
+                          <em>🧪</em>{i.testTargeting || 'no targeting set'}
+                        </span>
+                        <ConflictNote id={i.id} />
+                      </div>
+                    )}
                     {CARD_ATTRS.some(a => i.attrs?.[a]?.length) && (
                       <div className="backlog-attrs">
                         {CARD_ATTRS.flatMap(a => (i.attrs?.[a] || []).map(v => (
@@ -1048,6 +1139,16 @@ function ItemFields({ value, list, meta, monthAround, onChange }: {
         )}
       </div>
 
+      {list.fields.testTargeting && (
+        <div className="form-group">
+          <label className="form-label">🧪 Test Targeting {isTestItem(value as Initiative) && !value.testTargeting && <span className="field-note">(needed to check for test conflicts)</span>}</label>
+          <input className="form-input" key={(value as Initiative).id || 'new'} defaultValue={value.testTargeting || ''}
+            placeholder="e.g. Homepage hero, PDP: kids-calming-magnesium, /collections/kids"
+            onBlur={e => e.target.value.trim() !== (value.testTargeting || '') && onChange({ testTargeting: e.target.value.trim() })} />
+          <p className="field-hint">Comma-separated pages/areas this test changes. Overlapping A/B tests on the same target (or URL paths inside each other, or “sitewide”) are flagged as conflicts.</p>
+        </div>
+      )}
+
       {list.fields.sprint && (
         <div className="form-group">
           <label className="form-label">Sprint</label>
@@ -1071,6 +1172,17 @@ function ItemFields({ value, list, meta, monthAround, onChange }: {
         </div>
       )}
     </>
+  );
+}
+
+function DrawerConflicts({ id }: { id: string }) {
+  const cs = useConflicts().get(id);
+  if (!cs?.length) return null;
+  return (
+    <div className="conflict-banner" style={{ marginBottom: 14 }}>
+      <strong>⚠️ Test conflict{cs.length > 1 ? 's' : ''}</strong>
+      <ul>{cs.map(c => <li key={c.other.id}>“{c.other.name}” ({c.other.listName}) also targets <strong>{c.shared.join(', ')}</strong> {shortDate(c.from)} – {shortDate(c.to)}</li>)}</ul>
+    </div>
   );
 }
 
@@ -1106,6 +1218,7 @@ function Drawer({ item, meta, monthAround, onUpdate, onArchive, onClose }: {
           {dateRangeLabel(item) && <> · {dateRangeLabel(item)}</>}
         </div>
         <div className="drawer-source">On the roadmap via: <strong>{SOURCE_LABEL[sourceOf(item)]}</strong></div>
+        <DrawerConflicts id={item.id} />
 
         {list
           ? <ItemFields value={item} list={list} meta={meta} monthAround={monthAround} onChange={patch => onUpdate(item.id, patch)} />
@@ -1384,6 +1497,9 @@ export default function RoadmapPage() {
     updateItem(id, patch);
   }, [items, listOf, updateItem]);
 
+  // Conflicts are computed across all items (not just the filtered view)
+  const conflicts = useMemo(() => findConflicts(items), [items]);
+
   // --- Colors ---
   const colors = useMemo<Colors>(() => {
     const byPillar = !!meta?.pillars.length;
@@ -1417,7 +1533,7 @@ export default function RoadmapPage() {
     }
     if (search) {
       const q = search.toLowerCase();
-      if (!i.name.toLowerCase().includes(q) && !i.notes.toLowerCase().includes(q)) return false;
+      if (!i.name.toLowerCase().includes(q) && !i.notes.toLowerCase().includes(q) && !(i.testTargeting || '').toLowerCase().includes(q)) return false;
     }
     return true;
   }), [items, meta, fList, fPillar, fStatus, fPriority, fOwner, fSwing, fAttrs, search]);
@@ -1451,6 +1567,7 @@ export default function RoadmapPage() {
 
   return (
     <ColorCtx.Provider value={colors}>
+    <ConflictCtx.Provider value={conflicts}>
     <ScheduleCtx.Provider value={scheduleTo}>
       <div className="app">
         {pending > 0 && <div className="saving-indicator">Saving to ClickUp…</div>}
@@ -1588,6 +1705,7 @@ export default function RoadmapPage() {
         {addDefaults && meta && <AddModal meta={meta} defaults={addDefaults} monthAround={monthAround} saving={pending > 0} onAdd={addItem} onClose={() => setAddDefaults(null)} />}
       </div>
     </ScheduleCtx.Provider>
+    </ConflictCtx.Provider>
     </ColorCtx.Provider>
   );
 }

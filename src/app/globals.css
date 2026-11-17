@@ -539,3 +539,12 @@ button.crumb:hover { background: #f3f4f6; color: #111827; }
 .res-foot .neg { color: #b91c1c; } .res-foot .pos { color: #047857; }
 .res-none { color: #6b7280; }
 .res-nowrap { white-space: nowrap; }
+
+/* Test targeting & conflicts */
+.bar-conflict { box-shadow: 0 0 0 2px #ef4444 inset, 0 0 0 1px #fecaca; }
+.conflict-badge { display: inline-flex; align-items: center; gap: 3px; font-size: 10px; font-weight: 700; color: #b91c1c; background: #fee2e2; border-radius: 4px; padding: 1px 6px; cursor: help; white-space: nowrap; }
+.conflict-banner { background: #fef2f2; border: 1px solid #fecaca; color: #7f1d1d; border-radius: 10px; padding: 10px 14px; font-size: 12px; line-height: 1.5; }
+.conflict-banner ul { margin: 4px 0 0 18px; }
+.tt-chip { --c: #8b5cf6; }
+.tt-missing { --c: #f59e0b; font-style: italic; }
+.field-note { font-weight: 400; color: #d97706; font-size: 11px; }

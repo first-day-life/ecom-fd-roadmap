@@ -11,23 +11,27 @@ const TARGET_MONTH = {
 const RM_START = { id: 'f-rm-start', name: 'Roadmap Start Date', type: 'date', type_config: {} };
 const RM_END = { id: 'f-rm-end', name: 'Roadmap End Date', type: 'date', type_config: {} };
 
+const TEST_TARGETING = { id: 'f-test-targeting', name: '🧪 Test Targeting', type: 'short_text', type_config: {} };
+const TASK_CATEGORY = { id: 'f-task-cat', name: 'Task Category', type: 'drop_down', type_config: { options:
+  ['Development', 'Design', 'Testing', 'AB Test Launch'].map((n, i) => ({ id: `tc-${i}`, name: n, color: '#a78bfa', orderindex: i })) } };
+
 const S = (status: string, color: string, type: string) => ({ status, color, type });
 
 const LISTS: Record<string, { name: string; statuses: any[]; fields: any[] }> = {
   'mock-site': {
     name: 'Site Backlog',
     statuses: [S('backlog', '#ef4444', 'open'), S('prioritized / grooming', '#22c55e', 'custom'), S('in design', '#6366f1', 'custom'), S('in build', '#1090e0', 'custom'), S('qa', '#f8ae00', 'custom'), S('completed', '#008844', 'closed')],
-    fields: [RM_START, RM_END],
+    fields: [RM_START, RM_END, TEST_TARGETING, TASK_CATEGORY],
   },
   'mock-sprint': {
     name: 'Current Sprint',
     statuses: [S('to do', '#87909e', 'open'), S('in-progress', '#2dd4bf', 'custom'), S('qa', '#4466ff', 'custom'), S('ready for deploy', '#87909e', 'custom'), S('complete', '#008844', 'closed')],
-    fields: [TARGET_MONTH, RM_START, RM_END],
+    fields: [TARGET_MONTH, RM_START, RM_END, TEST_TARGETING, TASK_CATEGORY],
   },
   'mock-ab': {
     name: 'AB Test Backlog',
     statuses: [S('idea', '#87909e', 'open'), S('test running', '#e50000', 'custom'), S('analyzed', '#2ecd6f', 'closed')],
-    fields: [RM_START, RM_END],
+    fields: [RM_START, RM_END, TEST_TARGETING],
   },
   'mock-ideas': {
     name: 'Idea Parking Lot (pre-backlog)',
@@ -47,13 +51,15 @@ const ms = (d: string) => String(Date.UTC(+d.slice(0, 4), +d.slice(5, 7) - 1, +d
 
 function seed() {
   let n = 0;
-  const t = (list: string, name: string, o: { status?: string; pri?: number; month?: number; rstart?: string; rend?: string; start?: string; due?: string; who?: number[]; tags?: string[]; desc?: string } = {}) => {
+  const t = (list: string, name: string, o: { status?: string; pri?: number; month?: number; rstart?: string; rend?: string; tt?: string; cat?: number; start?: string; due?: string; who?: number[]; tags?: string[]; desc?: string } = {}) => {
     n++;
     const L = LISTS[list];
     const cf: any[] = [];
     if (o.month !== undefined) cf.push({ id: TARGET_MONTH.id, value: o.month });   // legacy dropdowns store orderindex
     if (o.rstart) cf.push({ id: RM_START.id, value: ms(o.rstart) });
     if (o.rend) cf.push({ id: RM_END.id, value: ms(o.rend) });
+    if (o.tt) cf.push({ id: TEST_TARGETING.id, value: o.tt });
+    if (o.cat !== undefined) cf.push({ id: TASK_CATEGORY.id, value: `tc-${o.cat}` });
     return {
       id: `mock${n}`, name, url: `https://app.clickup.com/t/mock${n}`, list: { id: list },
       status: L.statuses.find(s => s.status === o.status) || L.statuses[0],
@@ -72,6 +78,7 @@ function seed() {
     // Site Backlog — mix of native dates, roadmap dates only, and both (native wins)
     t('mock-site', 'Family Bundle Builder v2', { status: 'in build', pri: 2, start: '2026-11-02', due: '2026-11-20', who: [1], desc: 'Let parents build a multi-kid bundle in one flow.' }),
     t('mock-site', 'Post-purchase upsell page', { status: 'prioritized / grooming', pri: 3, rstart: '2026-11-16', rend: '2026-11-25' }),
+    t('mock-site', '[Launch Test] PDP sticky add-to-cart', { status: 'prioritized / grooming', pri: 2, cat: 3, tt: 'PDP: kids-calming-magnesium, /products', rstart: '2026-11-23', rend: '2026-12-04' }),
     t('mock-site', 'All-in-1 bundle launch', { status: 'in design', pri: 2, rstart: '2026-12-01', rend: '2026-12-18', who: [3] }),
     t('mock-site', 'Mobile nav redesign', { status: 'qa', pri: 2, start: '2026-10-19', due: '2026-11-04', rstart: '2026-12-01', rend: '2026-12-10', who: [2], desc: 'Has both task dates and roadmap dates — task dates win.' }),
     t('mock-site', 'Review widget swap', { status: 'backlog', pri: 4 }),
@@ -82,8 +89,8 @@ function seed() {
     t('mock-sprint', 'Holiday gift-with-purchase', { status: 'complete', pri: 2, month: 10, start: '2026-11-03', due: '2026-11-06', who: [1] }),
     t('mock-sprint', 'Quiz → PDP personalization', { status: 'to do', pri: 2, month: 10, who: [3] }),
     // AB Test Backlog — no custom fields
-    t('mock-ab', 'Subscription save-offer test', { status: 'test running', pri: 1, start: '2026-11-16', due: '2026-11-30' }),
-    t('mock-ab', 'PDP sticky ATC test', { status: 'idea', pri: 3, rstart: '2026-11-30' }),
+    t('mock-ab', 'Subscription save-offer test', { status: 'test running', pri: 1, start: '2026-11-16', due: '2026-11-30', tt: 'https://firstday.com/products/kids-calming-magnesium' }),
+    t('mock-ab', 'PDP sticky ATC test', { status: 'idea', pri: 3, rstart: '2026-11-30', tt: 'Homepage hero' }),
     // Idea Parking Lot — Target Month only
     t('mock-ideas', 'Win-back email + LP', { month: 11 }),
     t('mock-ideas', 'Loyalty tiers', { month: 11, pri: 3 }),

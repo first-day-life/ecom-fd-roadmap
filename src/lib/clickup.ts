@@ -45,6 +45,7 @@ const env = {
     roadmapStart: () => csv(process.env.CLICKUP_FIELD_ROADMAP_START || 'Roadmap Start Date,Roadmap Start'),
     roadmapEnd: () => csv(process.env.CLICKUP_FIELD_ROADMAP_END || 'Roadmap End Date,Roadmap End'),
     sprint: () => csv(process.env.CLICKUP_FIELD_SPRINT || 'Sprint'),
+    testTargeting: () => csv(process.env.CLICKUP_FIELD_TEST_TARGETING || 'Test Targeting'),
     bigSwing: () => csv(process.env.CLICKUP_FIELD_BIG_SWING || 'Big Swing'),
   },
 };
@@ -85,7 +86,7 @@ async function cu<T = any>(path: string, init: { method?: string; body?: unknown
 // ---------------------------------------------------------------------------
 
 interface RawField { id: string; name: string; type: string; type_config?: { options?: Array<{ id: string; name?: string; label?: string; color?: string; orderindex?: number }> } }
-type FieldKey = 'pillar' | 'roadmapMonth' | 'roadmapStart' | 'roadmapEnd' | 'sprint' | 'bigSwing';
+type FieldKey = 'pillar' | 'roadmapMonth' | 'roadmapStart' | 'roadmapEnd' | 'sprint' | 'bigSwing' | 'testTargeting';
 
 interface ListCtx {
   meta: ListMeta;
@@ -151,6 +152,7 @@ async function loadList(id: string, idx: number): Promise<{ ctx: ListCtx; member
     roadmapStart: findField(raw, env.fieldNames.roadmapStart()),
     roadmapEnd: findField(raw, env.fieldNames.roadmapEnd()),
     sprint: findField(raw, env.fieldNames.sprint()),
+    testTargeting: findField(raw, env.fieldNames.testTargeting()),
     bigSwing: findField(raw, env.fieldNames.bigSwing()),
   };
   const attrFields = env.filterFields()
@@ -172,7 +174,7 @@ async function loadList(id: string, idx: number): Promise<{ ctx: ListCtx; member
     statuses,
     fields: {
       pillar: !!fields.pillar, roadmapMonth: !!fields.roadmapMonth, roadmapStart: !!fields.roadmapStart, roadmapEnd: !!fields.roadmapEnd,
-      sprint: !!fields.sprint, bigSwing: !!fields.bigSwing,
+      sprint: !!fields.sprint, bigSwing: !!fields.bigSwing, testTargeting: !!fields.testTargeting,
     },
     pillars: fieldOptions(fields.pillar),
     sprintOptions: fields.sprint && ['drop_down', 'labels'].includes(fields.sprint.type) ? fieldOptions(fields.sprint) : [],
@@ -344,6 +346,7 @@ function mapTask(task: any, l: ListCtx): Initiative {
     roadmapStart,
     roadmapEnd,
     sprint: fieldText(l.fields.sprint, task),
+    testTargeting: fieldText(l.fields.testTargeting, task),
     startDate: start,
     dueDate: due,
     owners: (task.assignees || []).map(toMember),
@@ -430,6 +433,7 @@ export async function addInitiative(input: InitiativeInput & { name: string }, e
   push(f.roadmapStart, input.roadmapStart, 'date');
   push(f.roadmapEnd, input.roadmapEnd, 'date');
   push(f.sprint, input.sprint, 'plain');
+  push(f.testTargeting, input.testTargeting, 'plain');
   if (f.bigSwing && input.bigSwing) custom_fields.push({ id: f.bigSwing.id, value: true });
 
   const body: Record<string, unknown> = {
@@ -471,6 +475,7 @@ export async function updateInitiative(id: string, input: InitiativeInput): Prom
   if (input.roadmapStart !== undefined && f.roadmapStart) await setField(id, f.roadmapStart, fieldValueFor(f.roadmapStart, input.roadmapStart, 'date'));
   if (input.roadmapEnd !== undefined && f.roadmapEnd) await setField(id, f.roadmapEnd, fieldValueFor(f.roadmapEnd, input.roadmapEnd, 'date'));
   if (input.sprint !== undefined && f.sprint) await setField(id, f.sprint, fieldValueFor(f.sprint, input.sprint, 'plain'));
+  if (input.testTargeting !== undefined && f.testTargeting) await setField(id, f.testTargeting, fieldValueFor(f.testTargeting, input.testTargeting.trim(), 'plain'));
   if (input.bigSwing !== undefined && f.bigSwing) await cu(`/task/${id}/field/${f.bigSwing.id}`, { method: 'POST', body: { value: input.bigSwing } });
 
   invalidate();

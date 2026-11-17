@@ -23,6 +23,7 @@ export interface Initiative {
   roadmapStart: string;      // 'YYYY-MM-DD' from the "Roadmap Start Date" field, or ''
   roadmapEnd: string;        // 'YYYY-MM-DD' from the "Roadmap End Date" field, or ''
   sprint: string;            // Sprint field display value or ''
+  testTargeting: string;     // "🧪 Test Targeting" text (comma-separated targets) or ''
   startDate: string;         // native ClickUp start date 'YYYY-MM-DD' or ''
   dueDate: string;           // native ClickUp due date 'YYYY-MM-DD' or ''
   owners: Member[];
@@ -45,6 +46,7 @@ export interface InitiativeInput {
   roadmapStart?: string;
   roadmapEnd?: string;
   sprint?: string;
+  testTargeting?: string;
   // NOTE: no startDate/dueDate — the app never writes ClickUp's native task dates.
   ownerId?: number | null;   // replaces all assignees with this one (null = none)
   notes?: string;
@@ -59,7 +61,7 @@ export interface ListMeta {
   url: string;
   color: string;                  // UI color for the list (used when there's no Pillar field)
   statuses: StatusOption[];
-  fields: { pillar: boolean; roadmapMonth: boolean; roadmapStart: boolean; roadmapEnd: boolean; sprint: boolean; bigSwing: boolean };
+  fields: { pillar: boolean; roadmapMonth: boolean; roadmapStart: boolean; roadmapEnd: boolean; sprint: boolean; bigSwing: boolean; testTargeting: boolean };
   pillars: FieldOption[];
   sprintOptions: FieldOption[];   // empty when Sprint is free text (or missing)
   monthOptions: string[];         // 'YYYY-MM' values when the month field is a dropdown; empty = any month
