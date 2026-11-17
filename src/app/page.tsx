@@ -739,6 +739,107 @@ function BacklogView({ items, meta, onOpen, onSchedule }: {
 }
 
 // ---------------------------------------------------------------------------
+// Live Intelligems tests — how long each A/B test has been running (read-only)
+// ---------------------------------------------------------------------------
+
+interface LiveTest {
+  id: string; name: string; status: 'started' | 'paused'; type: string; typeLabel: string;
+  startedAt: string; pausedAt: string; daysRunning: number;
+  variations: Array<{ name: string; percentage: number; isControl: boolean }>;
+  estimatedDays: { low: number | null; high: number | null } | null;
+}
+
+/** Age bands for a running test: fresh < 14d, maturing < 28d, long-running ≥ 28d. */
+function ageBand(t: LiveTest): 'fresh' | 'mid' | 'long' | 'over' {
+  const hi = t.estimatedDays?.high;
+  if (hi && t.daysRunning > hi) return 'over';
+  if (t.daysRunning >= 28) return 'long';
+  if (t.daysRunning >= 14) return 'mid';
+  return 'fresh';
+}
+
+function TestsView() {
+  const [data, setData] = useState<{ configured: boolean; tests: LiveTest[]; error?: string } | null>(null);
+  useEffect(() => {
+    fetch('/api/tests', { cache: 'no-store' })
+      .then(r => r.json())
+      .then(setData)
+      .catch(e => setData({ configured: true, tests: [], error: String(e) }));
+  }, []);
+
+  if (!data) return <div className="loading-screen" style={{ minHeight: '30vh' }}><div className="spinner" /></div>;
+  if (!data.configured) {
+    return (
+      <div className="tests-empty">
+        <h3>🧪 Connect Intelligems</h3>
+        <p>Add an Intelligems API key to show live A/B tests here. In Intelligems go to <strong>Integrations → Intelligems External API → Enable</strong>, copy the key, and set it as <code>INTELLIGEMS_API_KEY</code> in Netlify’s environment variables (then redeploy). The roadmap only reads tests — it never changes them.</p>
+      </div>
+    );
+  }
+  if (data.error) return <div className="error-banner"><span>⚠</span> Couldn’t load Intelligems tests: {data.error}</div>;
+
+  const live = data.tests.filter(t => t.status === 'started');
+  const paused = data.tests.filter(t => t.status === 'paused');
+  const avg = live.length ? Math.round(live.reduce((n, t) => n + t.daysRunning, 0) / live.length) : 0;
+  const longest = live[0];
+
+  const Card = ({ t }: { t: LiveTest }) => {
+    const band = ageBand(t);
+    const est = t.estimatedDays;
+    const pct = est?.high ? Math.min(100, Math.round((t.daysRunning / est.high) * 100)) : null;
+    return (
+      <div className={`test-card band-${band} ${t.status === 'paused' ? 'test-paused' : ''}`}>
+        <div className="test-days">
+          <strong>{t.daysRunning}</strong>
+          <span>day{t.daysRunning === 1 ? '' : 's'}{t.status === 'paused' ? ' (paused)' : ' running'}</span>
+        </div>
+        <div className="test-main">
+          <div className="test-name" title={t.name}>{t.name}</div>
+          <div className="test-meta">
+            <span className="test-type">{t.typeLabel}</span>
+            <span>Started {new Date(t.startedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</span>
+            {t.pausedAt && <span>· Paused {new Date(t.pausedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</span>}
+            {band === 'over' && <span className="test-flag">⏰ Past estimated length</span>}
+            {band === 'long' && <span className="test-flag">⏳ 4+ weeks — time to call it?</span>}
+          </div>
+          {est && (est.low || est.high) && (
+            <div className="test-est">
+              <div className="progress-bar-bg"><div className="progress-bar-fill" style={{ width: (pct ?? 0) + '%', background: band === 'over' ? '#ef4444' : undefined }} /></div>
+              <span>Estimated length {est.low ?? '?'}–{est.high ?? '?'} days</span>
+            </div>
+          )}
+          <div className="test-vars">
+            {t.variations.map(v => <span key={v.name} className={`test-var ${v.isControl ? 'is-control' : ''}`}>{v.isControl ? '🅰️' : '🅱️'} {v.name} · {v.percentage}%</span>)}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  return (
+    <div className="tests-view">
+      <div className="side-stats tests-stats">
+        <div><strong>{live.length}</strong><span>live tests</span></div>
+        <div><strong>{avg}</strong><span>avg days running</span></div>
+        <div><strong>{longest ? longest.daysRunning : 0}</strong><span>longest (days)</span></div>
+        <div><strong>{paused.length}</strong><span>paused</span></div>
+      </div>
+      <p className="month-only-hint" style={{ margin: '0 0 12px' }}>
+        Live A/B tests from Intelligems, longest-running first. 🟢 under 2 weeks · 🟡 2–4 weeks · 🟠 4+ weeks · 🔴 past Intelligems’ estimated test length. Read-only; refreshes every 5 minutes.
+      </p>
+      {live.length === 0 && <div className="empty-state">No live tests right now.</div>}
+      <div className="tests-grid">{live.map(t => <Card key={t.id} t={t} />)}</div>
+      {paused.length > 0 && (
+        <>
+          <div className="form-section-label" style={{ marginTop: 20 }}>⏸️ Paused</div>
+          <div className="tests-grid">{paused.map(t => <Card key={t.id} t={t} />)}</div>
+        </>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // List view
 // ---------------------------------------------------------------------------
 
@@ -1044,8 +1145,8 @@ export default function RoadmapPage() {
   const [from, setFrom] = useState(() => todayStr().slice(0, 7));
   const [span, setSpan] = useState(3);
   const [month, setMonth] = useState<string | null>(null);
-  const [view, setViewState] = useState<'calendar' | 'list' | 'backlog'>('calendar');
-  const setView = useCallback((v: 'calendar' | 'list' | 'backlog') => {
+  const [view, setViewState] = useState<'calendar' | 'list' | 'backlog' | 'tests'>('calendar');
+  const setView = useCallback((v: 'calendar' | 'list' | 'backlog' | 'tests') => {
     setViewState(v);
     const q = new URLSearchParams(window.location.search);
     if (v === 'calendar') q.delete('view'); else q.set('view', v);
@@ -1071,7 +1172,7 @@ export default function RoadmapPage() {
     const sync = () => {
       const u = readUrl(); setFrom(u.from); setSpan(u.span); setMonth(u.month);
       const v = new URLSearchParams(window.location.search).get('view');
-      setView(v === 'list' || v === 'backlog' ? v : 'calendar');
+      setView(v === 'list' || v === 'backlog' || v === 'tests' ? v : 'calendar');
     };
     sync();
     window.addEventListener('popstate', sync);
@@ -1341,11 +1442,12 @@ export default function RoadmapPage() {
               <button className={view === 'calendar' ? 'active' : ''} onClick={() => setView('calendar')}>Calendar</button>
               <button className={view === 'list' ? 'active' : ''} onClick={() => setView('list')}>List</button>
               <button className={view === 'backlog' ? 'active' : ''} onClick={() => setView('backlog')} title="Every item in every list — plan into months">Backlog</button>
+              <button className={view === 'tests' ? 'active' : ''} onClick={() => setView('tests')} title="Live Intelligems A/B tests and how long they've run">🧪 Tests</button>
             </div>
           </div>
         </div>
 
-        {(showFilters || view === 'backlog') && meta && (
+        {(showFilters || view === 'backlog') && view !== 'tests' && meta && (
           <div className="filters">
             <input className={`filter-input ${search ? 'filter-on' : ''}`} placeholder="🔎 Search tickets…" value={search} onChange={e => setSearch(e.target.value)} />
             <select className={`filter-select ${fList ? 'filter-on' : ''}`} value={fList} onChange={e => setFList(e.target.value)}>
@@ -1409,7 +1511,9 @@ export default function RoadmapPage() {
 
         {meta && view === 'calendar' && <Legend meta={meta} />}
 
-        {view === 'backlog' && meta
+        {view === 'tests'
+          ? <TestsView />
+          : view === 'backlog' && meta
           ? <BacklogView items={filtered} meta={meta} onOpen={setSelectedId} onSchedule={scheduleTo} />
           : view === 'list'
           ? <ListView items={scoped} onOpen={setSelectedId} onToggleDone={toggleDone} />

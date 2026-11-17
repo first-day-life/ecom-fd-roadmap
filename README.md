@@ -23,6 +23,10 @@ Custom fields are matched **by name** on each list, ignoring case and emoji, so 
 
 "Archive" in the app archives the ClickUp task (restorable). Nothing is ever hard-deleted.
 
+## 🧪 Live tests (Intelligems)
+
+The **🧪 Tests** tab lists live and paused Intelligems A/B tests, longest-running first, with days running, Intelligems' estimated test length and the traffic split. It reads from the Intelligems External API (`GET /v25-10-beta/experiences-list`, read-only, cached 5 min). Set `INTELLIGEMS_API_KEY` (Intelligems → Integrations → Intelligems External API → Enable).
+
 ## Run locally
 
 ```bash

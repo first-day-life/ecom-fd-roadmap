@@ -490,3 +490,31 @@ button.crumb:hover { background: #f3f4f6; color: #111827; }
 /* Signed-in user */
 .auth-status { display: inline-flex; align-items: center; gap: 8px; margin-left: 6px; padding-left: 10px; border-left: 1px solid #e5e7eb; }
 .auth-email { font-size: 12px; color: #6b7280; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Live Intelligems tests */
+.tests-stats { max-width: 640px; margin-bottom: 12px; }
+.tests-stats div { background: #fff; border: 1px solid #e5e7eb; }
+.tests-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(460px, 1fr)); gap: 12px; }
+@media (max-width: 560px) { .tests-grid { grid-template-columns: 1fr; } }
+.test-card { display: flex; gap: 16px; background: #fff; border: 1px solid #e5e7eb; border-left: 4px solid #10b981; border-radius: 12px; padding: 14px 16px; }
+.test-card.band-mid { border-left-color: #f59e0b; }
+.test-card.band-long { border-left-color: #f97316; }
+.test-card.band-over { border-left-color: #ef4444; }
+.test-paused { opacity: 0.75; border-left-color: #9ca3af !important; }
+.test-days { display: flex; flex-direction: column; align-items: center; justify-content: center; min-width: 64px; }
+.test-days strong { font-size: 30px; line-height: 1; color: #0f1117; }
+.test-days span { font-size: 10px; color: #6b7280; text-transform: uppercase; letter-spacing: 0.4px; text-align: center; margin-top: 4px; }
+.test-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.test-name { font-size: 14px; font-weight: 700; color: #111827; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.test-meta { display: flex; flex-wrap: wrap; gap: 8px; font-size: 12px; color: #6b7280; align-items: center; }
+.test-type { background: #eef0fe; color: #4f6ef7; border-radius: 4px; padding: 1px 6px; font-weight: 600; font-size: 11px; }
+.test-flag { color: #c2410c; font-weight: 600; }
+.test-est { display: flex; align-items: center; gap: 10px; font-size: 11px; color: #6b7280; }
+.test-est .progress-bar-bg { flex: 1; max-width: 220px; }
+.test-vars { display: flex; flex-wrap: wrap; gap: 6px; }
+.test-var { font-size: 11px; background: #f3f4f6; border-radius: 4px; padding: 1px 7px; color: #374151; }
+.test-var.is-control { background: #ecfdf5; color: #047857; }
+.tests-empty { background: #fff; border: 1px dashed #d1d5db; border-radius: 12px; padding: 24px; max-width: 720px; }
+.tests-empty h3 { font-size: 16px; margin-bottom: 8px; }
+.tests-empty p { font-size: 13px; color: #374151; line-height: 1.6; }
+.tests-empty code { background: #f3f4f6; padding: 1px 5px; border-radius: 4px; }
