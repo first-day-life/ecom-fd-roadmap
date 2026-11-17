@@ -142,16 +142,16 @@ async function api<T>(url: string, opts?: RequestInit): Promise<T> {
 }
 
 /** Month choices: the dropdown's own options when it has them, else a rolling range. */
-function monthChoices(list: ListMeta | undefined, around: string): string[] {
-  if (list?.monthOptions.length) return list.monthOptions;
-  const out: string[] = [];
-  for (let d = -6; d <= 12; d++) out.push(shiftMonth(around, d));
-  return out;
+function monthChoices(list: ListMeta | undefined, _around: string): string[] {
+  // Never offer past months: start at the current month
+  const nowYm = todayStr().slice(0, 7);
+  if (list?.monthOptions.length) return list.monthOptions.filter(m => m >= nowYm);
+  return Array.from({ length: 13 }, (_, d) => shiftMonth(nowYm, d));
 }
 
-/** Mondays from ~2 months before `around` to ~12 months after, plus `current`'s week if outside. */
-function weekChoices(around: string, current?: string): string[] {
-  const first = mondayOf(monthStart(shiftMonth(around, -2)));
+/** Mondays from the current week forward ~15 months. A past `current` value stays selectable so it still displays. */
+function weekChoices(_around: string, current?: string): string[] {
+  const first = mondayOf(todayStr());
   const out: string[] = [];
   for (let i = 0; i < 64; i++) out.push(addDays(first, 7 * i));
   if (current && !out.includes(mondayOf(current))) out.push(mondayOf(current));
@@ -851,7 +851,7 @@ function ItemFields({ value, list, meta, monthAround, onChange }: {
                 onChange({ roadmapStart: mon, roadmapEnd: keepEnd });
               }}>
               <option value="">Not scheduled</option>
-              {weekChoices(monthAround, value.roadmapStart).map(m => <option key={m} value={m}>Week of {shortDate(m)}, {m.slice(0, 4)}</option>)}
+              {weekChoices(monthAround, value.roadmapStart).map(m => <option key={m} value={m}>Week of {shortDate(m)}, {m.slice(0, 4)}{m < mondayOf(todayStr()) ? ' (past)' : ''}</option>)}
             </select>
           </div>
           <div className="form-group">
@@ -864,7 +864,7 @@ function ItemFields({ value, list, meta, monthAround, onChange }: {
                 onChange({ roadmapStart: start, roadmapEnd: fridayOf(mon) });
               }}>
               {!value.roadmapStart && <option value="">—</option>}
-              {weekChoices(monthAround, value.roadmapEnd).filter(m => !value.roadmapStart || m >= mondayOf(value.roadmapStart)).map(m => <option key={m} value={m}>Week of {shortDate(m)} (ends {shortDate(fridayOf(m))})</option>)}
+              {weekChoices(monthAround, value.roadmapEnd).filter(m => !value.roadmapStart || m >= mondayOf(value.roadmapStart)).map(m => <option key={m} value={m}>Week of {shortDate(m)} (ends {shortDate(fridayOf(m))}){m < mondayOf(todayStr()) ? ' (past)' : ''}</option>)}
             </select>
           </div>
         </div>
@@ -876,7 +876,7 @@ function ItemFields({ value, list, meta, monthAround, onChange }: {
             <label className="form-label">Target Month</label>
             <select className="form-select" value={value.roadmapMonth || ''} onChange={e => onChange({ roadmapMonth: e.target.value })}>
               <option value="">—</option>
-              {value.roadmapMonth && !monthChoices(list, monthAround).includes(value.roadmapMonth) && <option value={value.roadmapMonth}>{monthLabel(value.roadmapMonth)}</option>}
+              {value.roadmapMonth && !monthChoices(list, monthAround).includes(value.roadmapMonth) && <option value={value.roadmapMonth}>{monthLabel(value.roadmapMonth)}{value.roadmapMonth < todayStr().slice(0, 7) ? ' (past)' : ''}</option>}
               {monthChoices(list, monthAround).map(m => <option key={m} value={m}>{monthLabel(m)}</option>)}
             </select>
           </div>
