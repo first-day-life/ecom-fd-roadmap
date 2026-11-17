@@ -1024,6 +1024,16 @@ function AddModal({ meta, defaults, monthAround, saving, onAdd, onClose }: {
 // Page
 // ---------------------------------------------------------------------------
 
+/** Cross-list stage of an item: not started (first/open status), in progress, or done. */
+type Stage = 'todo' | 'doing' | 'done';
+function stageOf(i: Initiative, lists: ListMeta[]): Stage {
+  if (i.done) return 'done';
+  const l = lists.find(x => x.id === i.listId);
+  const st = l?.statuses.find(x => x.name === i.status);
+  return !st || st.type === 'open' ? 'todo' : 'doing';
+}
+const STAGE_LABEL: Record<Stage, string> = { todo: '🕓 Not started', doing: '🔨 In progress', done: '✅ Done' };
+
 export default function RoadmapPage() {
   const [items, setItems] = useState<Initiative[]>([]);
   const [meta, setMeta] = useState<RoadmapMeta | null>(null);
@@ -1224,13 +1234,15 @@ export default function RoadmapPage() {
   }, [meta]);
 
   // --- Filtering ---
-  const allStatuses = useMemo(() => Array.from(new Set((meta?.lists || []).flatMap(l => l.statuses.map(s => s.name)))), [meta]);
   const filtered = useMemo(() => items.filter(i => {
     if (fList && i.listId !== fList) return false;
     if (fPillar && i.pillar !== fPillar) return false;
     if (fStatus === '__open' && i.done) return false;
-    if (fStatus === '__done' && !i.done) return false;
-    if (fStatus && !fStatus.startsWith('__') && i.status !== fStatus) return false;
+    if (fStatus.startsWith('__stage:') && stageOf(i, meta?.lists || []) !== fStatus.slice(8)) return false;
+    if (fStatus.includes('::')) {
+      const [lid, st] = fStatus.split('::');
+      if (i.listId !== lid || i.status !== st) return false;
+    }
     if (fPriority && i.priority !== fPriority) return false;
     if (fOwner && !i.owners.some(o => String(o.id) === fOwner)) return false;
     if (fSwing === 'yes' && !i.bigSwing) return false;
@@ -1244,7 +1256,7 @@ export default function RoadmapPage() {
       if (!i.name.toLowerCase().includes(q) && !i.notes.toLowerCase().includes(q)) return false;
     }
     return true;
-  }), [items, fList, fPillar, fStatus, fPriority, fOwner, fSwing, fAttrs, search]);
+  }), [items, meta, fList, fPillar, fStatus, fPriority, fOwner, fSwing, fAttrs, search]);
   const activeFilters = [fList, fPillar, fStatus, fPriority, fOwner, fSwing, search].filter(Boolean).length + Object.keys(fAttrs).length;
   const clearFilters = () => { setSearch(''); setFList(''); setFPillar(''); setFStatus(''); setFPriority(''); setFOwner(''); setFSwing(''); setFAttrs({}); };
 
@@ -1348,9 +1360,25 @@ export default function RoadmapPage() {
             )}
             <select className={`filter-select ${fStatus ? 'filter-on' : ''}`} value={fStatus} onChange={e => setFStatus(e.target.value)}>
               <option value="">📍 All statuses</option>
-              <option value="__open">📍 Not done</option>
-              <option value="__done">📍 Done</option>
-              {(fList ? meta.lists.find(l => l.id === fList)?.statuses.map(x => x.name) || [] : allStatuses).map(s => <option key={s} value={s}>📍 {s}</option>)}
+              <optgroup label="Stage (all lists)">
+                <option value="__open">⏳ Not done</option>
+                {(['todo', 'doing', 'done'] as Stage[]).map(st => (
+                  <option key={st} value={`__stage:${st}`}>{STAGE_LABEL[st]} ({items.filter(i => stageOf(i, meta.lists) === st).length})</option>
+                ))}
+              </optgroup>
+              {meta.lists.filter(l => !fList || l.id === fList).map(l => {
+                const opts = l.statuses
+                  .map(st => ({ st, n: items.filter(i => i.listId === l.id && i.status === st.name).length }))
+                  .filter(x => x.n > 0 || fStatus === `${l.id}::${x.st.name}`);
+                if (!opts.length) return null;
+                return (
+                  <optgroup key={l.id} label={`📋 ${l.name}`}>
+                    {opts.map(({ st, n }) => (
+                      <option key={st.name} value={`${l.id}::${st.name}`}>{st.done ? '✅' : st.type === 'open' ? '🕓' : '🔨'} {st.name} ({n})</option>
+                    ))}
+                  </optgroup>
+                );
+              })}
             </select>
             <select className={`filter-select ${fPriority ? 'filter-on' : ''}`} value={fPriority} onChange={e => setFPriority(e.target.value)}>
               <option value="">⚡ All priorities</option>
