@@ -525,6 +525,13 @@ function placementLabel(i: Initiative): string {
   return dateRangeLabel(i) + (src === 'roadmap' ? ' · roadmap' : src === 'sprint' ? ' · sprint' : ' · ClickUp dates');
 }
 
+/** Emoji per filterable field, so the filter bar and card chips are quick to scan. */
+const FIELD_EMOJI: Record<string, string> = {
+  'ROCK': '🪨', 'TACTIC': '🎯', 'Task Category': '🗂️', 'Type of Request': '📨', 'Ready to Start?': '🚦',
+  'Project Owner': '🧑‍💼', 'Experiment Type': '🧪', 'Size': '📏', 'Impact': '💥', 'Complexity': '🧩',
+};
+const fieldEmoji = (label: string) => FIELD_EMOJI[label] || '🏷️';
+
 const COLLAPSE_KEY = 'roadmap.backlog.collapsed';
 const CARD_ATTRS = ['ROCK', 'TACTIC', 'Task Category'];   // shown as chips on backlog cards
 
@@ -580,7 +587,7 @@ function BacklogView({ items, meta, onOpen, onSchedule }: {
           <button className={show === 'all' ? 'active' : ''} onClick={() => setShow('all')}>Everything</button>
         </div>
         <span className="month-window-range">{visible.length} items</span>
-        <span className="month-only-hint" style={{ margin: 0 }}>Use the filters above (ROCK, TACTIC, Task Category, status…) to narrow down. Click a column header to collapse it.</span>
+        <span className="month-only-hint" style={{ margin: 0 }}>Narrow down with 🪨 ROCK, 🎯 TACTIC, 🗂️ Task Category, 📍 status and more above — pick a 📋 list to see only its filters. Click a column header to collapse it.</span>
       </div>
 
       <div className="backlog-cols">
@@ -623,7 +630,7 @@ function BacklogView({ items, meta, onOpen, onSchedule }: {
                       <div className="backlog-attrs">
                         {CARD_ATTRS.flatMap(a => (i.attrs?.[a] || []).map(v => (
                           <span key={a + v} className="attr-chip" style={{ '--c': optColor(a, v) } as React.CSSProperties} title={`${a}: ${v}`}>
-                            <em>{a === 'Task Category' ? 'Cat' : a}</em>{v}
+                            <em>{fieldEmoji(a)}</em>{v}
                           </span>
                         )))}
                       </div>
@@ -1247,44 +1254,44 @@ export default function RoadmapPage() {
 
         {(showFilters || view === 'backlog') && meta && (
           <div className="filters">
-            <input className="filter-input" placeholder="Search tickets…" value={search} onChange={e => setSearch(e.target.value)} />
-            <select className="filter-select" value={fList} onChange={e => setFList(e.target.value)}>
-              <option value="">All lists</option>
-              {meta.lists.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
+            <input className={`filter-input ${search ? 'filter-on' : ''}`} placeholder="🔎 Search tickets…" value={search} onChange={e => setSearch(e.target.value)} />
+            <select className={`filter-select ${fList ? 'filter-on' : ''}`} value={fList} onChange={e => setFList(e.target.value)}>
+              <option value="">📋 All lists</option>
+              {meta.lists.map(l => <option key={l.id} value={l.id}>📋 {l.name}</option>)}
             </select>
             {meta.pillars.length > 0 && (
-              <select className="filter-select" value={fPillar} onChange={e => setFPillar(e.target.value)}>
-                <option value="">All pillars</option>
-                {meta.pillars.map(p => <option key={p.id} value={p.name}>{p.name}</option>)}
+              <select className={`filter-select ${fPillar ? 'filter-on' : ''}`} value={fPillar} onChange={e => setFPillar(e.target.value)}>
+                <option value="">🏛️ All pillars</option>
+                {meta.pillars.map(p => <option key={p.id} value={p.name}>🏛️ {p.name}</option>)}
               </select>
             )}
-            <select className="filter-select" value={fStatus} onChange={e => setFStatus(e.target.value)}>
-              <option value="">All statuses</option>
-              <option value="__open">Not done</option>
-              <option value="__done">Done</option>
-              {allStatuses.map(s => <option key={s} value={s}>{s}</option>)}
+            <select className={`filter-select ${fStatus ? 'filter-on' : ''}`} value={fStatus} onChange={e => setFStatus(e.target.value)}>
+              <option value="">📍 All statuses</option>
+              <option value="__open">📍 Not done</option>
+              <option value="__done">📍 Done</option>
+              {(fList ? meta.lists.find(l => l.id === fList)?.statuses.map(x => x.name) || [] : allStatuses).map(s => <option key={s} value={s}>📍 {s}</option>)}
             </select>
-            <select className="filter-select" value={fPriority} onChange={e => setFPriority(e.target.value)}>
-              <option value="">All priorities</option>
-              {PRIORITIES.map(p => <option key={p}>{p}</option>)}
+            <select className={`filter-select ${fPriority ? 'filter-on' : ''}`} value={fPriority} onChange={e => setFPriority(e.target.value)}>
+              <option value="">⚡ All priorities</option>
+              {PRIORITIES.map(p => <option key={p} value={p}>⚡ {p}</option>)}
             </select>
-            <select className="filter-select" value={fOwner} onChange={e => setFOwner(e.target.value)}>
-              <option value="">All assignees</option>
-              {meta.members.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+            <select className={`filter-select ${fOwner ? 'filter-on' : ''}`} value={fOwner} onChange={e => setFOwner(e.target.value)}>
+              <option value="">👤 All assignees</option>
+              {meta.members.map(m => <option key={m.id} value={m.id}>👤 {m.name}</option>)}
             </select>
             {anyBigSwing && (
-              <select className="filter-select" value={fSwing} onChange={e => setFSwing(e.target.value)}>
-                <option value="">All initiatives</option>
-                <option value="yes">Big Swings only</option>
-                <option value="no">Non-Big Swings</option>
+              <select className={`filter-select ${fSwing ? 'filter-on' : ''}`} value={fSwing} onChange={e => setFSwing(e.target.value)}>
+                <option value="">⭐ All initiatives</option>
+                <option value="yes">⭐ Big Swings only</option>
+                <option value="no">⭐ Non-Big Swings</option>
               </select>
             )}
-            {meta.filterFields.map(ff => (
+            {meta.filterFields.filter(ff => !fList || ff.lists.includes(fList) || fAttrs[ff.label]).map(ff => (
               <select key={ff.label} className={`filter-select ${fAttrs[ff.label] ? 'filter-on' : ''}`} value={fAttrs[ff.label] || ''} onChange={e => setAttr(ff.label, e.target.value)}
                 title={`Filter by the ClickUp field “${ff.label}” (on ${ff.lists.map(id => meta.lists.find(l => l.id === id)?.name).filter(Boolean).join(', ')})`}>
-                <option value="">{ff.label}: any</option>
-                <option value="__none">{ff.label}: not set</option>
-                {ff.options.map(o => <option key={o.id} value={o.name}>{ff.label}: {o.name}</option>)}
+                <option value="">{fieldEmoji(ff.label)} {ff.label}: any</option>
+                <option value="__none">{fieldEmoji(ff.label)} {ff.label}: not set</option>
+                {ff.options.map(o => <option key={o.id} value={o.name}>{fieldEmoji(ff.label)} {o.name}</option>)}
               </select>
             ))}
             {activeFilters > 0 && <button className="btn btn-ghost btn-sm" onClick={clearFilters}>Clear ({activeFilters})</button>}
