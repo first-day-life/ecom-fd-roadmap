@@ -1,5 +1,6 @@
 'use client';
 
+import { GoogleAuthButton } from '@/components/GoogleAuthButton';
 import { useState, useCallback } from 'react';
 import Link from 'next/link';
 
@@ -116,8 +117,9 @@ export default function RequestsPage() {
     return (
       <div className="request-page">
         <div className="request-card" style={{ maxWidth: 400 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 4 }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 4 }}>
             <Link href="/" className="btn btn-ghost btn-sm">← Roadmap</Link>
+            <GoogleAuthButton />
           </div>
           <h1 style={{ fontSize: 20, fontWeight: 700, margin: '16px 0 4px' }}>Review Requests</h1>
           <p style={{ fontSize: 13, color: '#6b7280', marginBottom: 24 }}>
@@ -160,6 +162,7 @@ export default function RequestsPage() {
           <p>{requests.length} request{requests.length !== 1 ? 's' : ''} awaiting review</p>
         </div>
         <div className="header-right">
+          <GoogleAuthButton />
           <Link href="/" className="btn btn-ghost btn-sm">← Roadmap</Link>
           <button className="btn btn-ghost btn-sm" onClick={() => fetchRequests(password)}>Refresh</button>
         </div>
