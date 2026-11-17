@@ -18,7 +18,7 @@
 // Requests are tasks carrying the request tag (default "roadmap-request").
 // Approving removes the tag; rejecting archives the task.
 
-import type { Initiative, InitiativeInput, Member, RoadmapMeta, RoadmapRequest, FieldOption, StatusOption, ListMeta } from './types';
+import type { Initiative, InitiativeInput, Member, RoadmapMeta, RoadmapRequest, FieldOption, StatusOption, ListMeta, FilterField } from './types';
 import { parseMonthLabel, monthLabel } from './dates';
 import { mockFetch } from './clickupMock';
 
@@ -37,6 +37,8 @@ const env = {
   teamId: () => process.env.CLICKUP_TEAM_ID || '',
   tz: () => process.env.ROADMAP_TIMEZONE || 'America/New_York',
   requestTag: () => (process.env.CLICKUP_REQUEST_TAG || 'roadmap-request').toLowerCase(),
+  // Extra ClickUp fields offered as filters (dropdown, label or people fields), in display order
+  filterFields: () => csv(process.env.CLICKUP_FILTER_FIELDS || 'ROCK,TACTIC,Task Category,Type of Request,Ready to Start?,Project Owner,Experiment Type,Size,Impact'),
   fieldNames: {
     pillar: () => csv(process.env.CLICKUP_FIELD_PILLAR || 'Pillar'),
     roadmapMonth: () => csv(process.env.CLICKUP_FIELD_ROADMAP_MONTH || 'Target Month,Roadmap Month'),
@@ -88,6 +90,7 @@ type FieldKey = 'pillar' | 'roadmapMonth' | 'roadmapStart' | 'roadmapEnd' | 'spr
 interface ListCtx {
   meta: ListMeta;
   fields: Partial<Record<FieldKey, RawField>>;
+  attrFields: Array<{ label: string; field: RawField }>;
 }
 
 interface Ctx {
@@ -150,6 +153,9 @@ async function loadList(id: string, idx: number): Promise<{ ctx: ListCtx; member
     sprint: findField(raw, env.fieldNames.sprint()),
     bigSwing: findField(raw, env.fieldNames.bigSwing()),
   };
+  const attrFields = env.filterFields()
+    .map(label => ({ label, field: findField(raw, [label]) }))
+    .filter((x): x is { label: string; field: RawField } => !!x.field && ['drop_down', 'labels', 'users'].includes(x.field.type));
   const statuses: StatusOption[] = (list.statuses || []).map((s: any) => ({
     name: s.status, color: s.color || '#9ca3af', type: s.type, done: s.type === 'closed' || s.type === 'done',
   }));
@@ -172,7 +178,7 @@ async function loadList(id: string, idx: number): Promise<{ ctx: ListCtx; member
     sprintOptions: fields.sprint && ['drop_down', 'labels'].includes(fields.sprint.type) ? fieldOptions(fields.sprint) : [],
     monthOptions,
   };
-  return { ctx: { meta, fields }, members: (memberRes.members || []).map(toMember) };
+  return { ctx: { meta, fields, attrFields }, members: (memberRes.members || []).map(toMember) };
 }
 
 async function getCtx(force = false): Promise<Ctx> {
@@ -187,10 +193,25 @@ async function getCtx(force = false): Promise<Ctx> {
   const pillars = new Map<string, FieldOption>();
   loaded.forEach(l => l.ctx.meta.pillars.forEach(p => { if (!pillars.has(p.name)) pillars.set(p.name, p); }));
 
+  // Filter fields: union of options across the lists that have each field
+  const filterFields: FilterField[] = [];
+  for (const label of env.filterFields()) {
+    const holders = loaded.filter(l => l.ctx.attrFields.some(a => a.label === label));
+    if (!holders.length) continue;
+    const opts = new Map<string, FieldOption>();
+    for (const h of holders) {
+      const a = h.ctx.attrFields.find(x => x.label === label)!;
+      if (a.field.type === 'users') h.members.forEach(m => { if (!opts.has(m.name)) opts.set(m.name, { id: String(m.id), name: m.name, color: m.color }); });
+      else fieldOptions(a.field).forEach(o => { if (o.name && !opts.has(o.name)) opts.set(o.name, o); });
+    }
+    filterFields.push({ label, options: Array.from(opts.values()), lists: holders.map(h => h.ctx.meta.id) });
+  }
+
   const pick = (want: string) => (want && lists.has(want) ? want : ids[0]);
   const defaultListId = pick(env.defaultListId());
   const meta: RoadmapMeta = {
     lists: loaded.map(l => l.ctx.meta),
+    filterFields,
     defaultListId,
     requestListId: env.requestListId() && lists.has(env.requestListId()) ? env.requestListId() : defaultListId,
     pillars: Array.from(pillars.values()),
@@ -325,7 +346,24 @@ function mapTask(task: any, l: ListCtx): Initiative {
     notes: task.markdown_description ?? task.text_content ?? task.description ?? '',
     tags: (task.tags || []).map((x: any) => String(x.name).toLowerCase()),
     createdAt: task.date_created ? new Date(Number(task.date_created)).toISOString() : '',
+    attrs: readAttrs(l, task),
   };
+}
+
+/** Values of the filterable fields: option names for dropdown/labels, people names for users fields. */
+function readAttrs(l: ListCtx, task: any): Record<string, string[]> {
+  const out: Record<string, string[]> = {};
+  for (const { label, field } of l.attrFields) {
+    const v = rawValue(field, task);
+    if (v === undefined || v === null || v === '') continue;
+    let names: string[] = [];
+    if (field.type === 'drop_down') names = [optionFor(field, v)?.name || ''];
+    else if (field.type === 'labels' && Array.isArray(v)) names = v.map(x => optionFor(field, x)?.name || '');
+    else if (field.type === 'users' && Array.isArray(v)) names = v.map((u: any) => u.username || u.email || String(u.id));
+    names = names.filter(Boolean);
+    if (names.length) out[label] = names;
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------------------

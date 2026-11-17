@@ -525,19 +525,33 @@ function placementLabel(i: Initiative): string {
   return dateRangeLabel(i) + (src === 'roadmap' ? ' · roadmap' : src === 'sprint' ? ' · sprint' : ' · ClickUp dates');
 }
 
-function BacklogView({ items, lists, onOpen, onSchedule }: {
-  items: Initiative[]; lists: ListMeta[]; onOpen: (id: string) => void; onSchedule: (id: string, t: Target) => void;
+const COLLAPSE_KEY = 'roadmap.backlog.collapsed';
+const CARD_ATTRS = ['ROCK', 'TACTIC', 'Task Category'];   // shown as chips on backlog cards
+
+function BacklogView({ items, meta, onOpen, onSchedule }: {
+  items: Initiative[]; meta: RoadmapMeta; onOpen: (id: string) => void; onSchedule: (id: string, t: Target) => void;
 }) {
   const { listColor } = useColors();
+  const lists = meta.lists;
   const nowYm = todayStr().slice(0, 7);
   const months = Array.from({ length: 12 }, (_, i) => shiftMonth(nowYm, i));
   const [show, setShow] = useState<'unplanned' | 'open' | 'all'>('open');
-  const [query, setQuery] = useState('');
+
+  // Collapsed columns — Current Sprint starts collapsed; choice remembered per browser
+  const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set(lists.filter(l => /current sprint/i.test(l.name)).map(l => l.id)));
+  useEffect(() => {
+    try { const saved = localStorage.getItem(COLLAPSE_KEY); if (saved) setCollapsed(new Set(JSON.parse(saved))); } catch { /* storage unavailable */ }
+  }, []);
+  const toggleCol = (id: string) => setCollapsed(prev => {
+    const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id);
+    try { localStorage.setItem(COLLAPSE_KEY, JSON.stringify(Array.from(n))); } catch { /* ignore */ }
+    return n;
+  });
+  const optColor = (label: string, name: string) => meta.filterFields.find(f => f.label === label)?.options.find(o => o.name === name)?.color || '#9ca3af';
 
   const visible = items.filter(i => {
     if (show === 'unplanned' && sourceOf(i) !== 'none') return false;
     if (show !== 'all' && i.done) return false;
-    if (query && !i.name.toLowerCase().includes(query.toLowerCase())) return false;
     return true;
   });
 
@@ -565,8 +579,8 @@ function BacklogView({ items, lists, onOpen, onSchedule }: {
           <button className={show === 'open' ? 'active' : ''} onClick={() => setShow('open')}>All open</button>
           <button className={show === 'all' ? 'active' : ''} onClick={() => setShow('all')}>Everything</button>
         </div>
-        <input className="filter-input" placeholder="Search all lists…" value={query} onChange={e => setQuery(e.target.value)} />
         <span className="month-window-range">{visible.length} items</span>
+        <span className="month-only-hint" style={{ margin: 0 }}>Use the filters above (ROCK, TACTIC, Task Category, status…) to narrow down. Click a column header to collapse it.</span>
       </div>
 
       <div className="backlog-cols">
@@ -574,13 +588,23 @@ function BacklogView({ items, lists, onOpen, onSchedule }: {
           const colItems = visible
             .filter(i => i.listId === l.id)
             .sort((a, b) => (spanOf(a)?.start || a.roadmapMonth || '9999').localeCompare(spanOf(b)?.start || b.roadmapMonth || '9999'));
+          if (collapsed.has(l.id)) {
+            return (
+              <button key={l.id} className="backlog-col backlog-col-collapsed" onClick={() => toggleCol(l.id)} title={`Expand ${l.name}`}>
+                <span className="list-dot" style={{ background: listColor(l.id) }} />
+                <span className="count-badge">{colItems.length}</span>
+                <span className="backlog-col-vertical">{l.name}</span>
+              </button>
+            );
+          }
           return (
             <section key={l.id} className="backlog-col">
-              <div className="backlog-col-head">
+              <button className="backlog-col-head" onClick={() => toggleCol(l.id)} title="Collapse column">
                 <span className="list-dot" style={{ background: listColor(l.id) }} />
                 <span className="backlog-col-name">{l.name}</span>
                 <span className="count-badge">{colItems.length}</span>
-              </div>
+                <span className="backlog-col-caret">⟨</span>
+              </button>
               <div className="backlog-col-body">
                 {colItems.map(i => (
                   <div
@@ -595,6 +619,15 @@ function BacklogView({ items, lists, onOpen, onSchedule }: {
                       <span className={`backlog-place ${sourceOf(i) === 'none' ? 'is-unplanned' : ''}`}>{placementLabel(i)}</span>
                       <Avatars owners={i.owners} />
                     </div>
+                    {CARD_ATTRS.some(a => i.attrs?.[a]?.length) && (
+                      <div className="backlog-attrs">
+                        {CARD_ATTRS.flatMap(a => (i.attrs?.[a] || []).map(v => (
+                          <span key={a + v} className="attr-chip" style={{ '--c': optColor(a, v) } as React.CSSProperties} title={`${a}: ${v}`}>
+                            <em>{a === 'Task Category' ? 'Cat' : a}</em>{v}
+                          </span>
+                        )))}
+                      </div>
+                    )}
                     {sourceOf(i) === 'dates'
                       ? <div className="backlog-locked-note">🔒 Dated in ClickUp</div>
                       : <select
@@ -933,6 +966,8 @@ export default function RoadmapPage() {
   const [fPriority, setFPriority] = useState('');
   const [fOwner, setFOwner] = useState('');
   const [fSwing, setFSwing] = useState('');
+  const [fAttrs, setFAttrs] = useState<Record<string, string>>({});   // ROCK, TACTIC, … → option ('__none' = not set)
+  const setAttr = (label: string, v: string) => setFAttrs(prev => { const n = { ...prev }; if (v) n[label] = v; else delete n[label]; return n; });
 
   // --- URL <-> navigation ---
   useEffect(() => {
@@ -1113,14 +1148,18 @@ export default function RoadmapPage() {
     if (fOwner && !i.owners.some(o => String(o.id) === fOwner)) return false;
     if (fSwing === 'yes' && !i.bigSwing) return false;
     if (fSwing === 'no' && i.bigSwing) return false;
+    for (const [label, want] of Object.entries(fAttrs)) {
+      const have = i.attrs?.[label] || [];
+      if (want === '__none' ? have.length > 0 : !have.includes(want)) return false;
+    }
     if (search) {
       const q = search.toLowerCase();
       if (!i.name.toLowerCase().includes(q) && !i.notes.toLowerCase().includes(q)) return false;
     }
     return true;
-  }), [items, fList, fPillar, fStatus, fPriority, fOwner, fSwing, search]);
-  const activeFilters = [fList, fPillar, fStatus, fPriority, fOwner, fSwing, search].filter(Boolean).length;
-  const clearFilters = () => { setSearch(''); setFList(''); setFPillar(''); setFStatus(''); setFPriority(''); setFOwner(''); setFSwing(''); };
+  }), [items, fList, fPillar, fStatus, fPriority, fOwner, fSwing, fAttrs, search]);
+  const activeFilters = [fList, fPillar, fStatus, fPriority, fOwner, fSwing, search].filter(Boolean).length + Object.keys(fAttrs).length;
+  const clearFilters = () => { setSearch(''); setFList(''); setFPillar(''); setFStatus(''); setFPriority(''); setFOwner(''); setFSwing(''); setFAttrs({}); };
 
   const windowMonths = Array.from({ length: span }, (_, i) => shiftMonth(from, i));
   const scoped = month
@@ -1206,9 +1245,9 @@ export default function RoadmapPage() {
           </div>
         </div>
 
-        {showFilters && meta && (
+        {(showFilters || view === 'backlog') && meta && (
           <div className="filters">
-            <input className="filter-input" placeholder="Search…" value={search} onChange={e => setSearch(e.target.value)} />
+            <input className="filter-input" placeholder="Search tickets…" value={search} onChange={e => setSearch(e.target.value)} />
             <select className="filter-select" value={fList} onChange={e => setFList(e.target.value)}>
               <option value="">All lists</option>
               {meta.lists.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
@@ -1230,7 +1269,7 @@ export default function RoadmapPage() {
               {PRIORITIES.map(p => <option key={p}>{p}</option>)}
             </select>
             <select className="filter-select" value={fOwner} onChange={e => setFOwner(e.target.value)}>
-              <option value="">All owners</option>
+              <option value="">All assignees</option>
               {meta.members.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
             </select>
             {anyBigSwing && (
@@ -1240,14 +1279,22 @@ export default function RoadmapPage() {
                 <option value="no">Non-Big Swings</option>
               </select>
             )}
-            {activeFilters > 0 && <button className="btn btn-ghost btn-sm" onClick={clearFilters}>Clear</button>}
+            {meta.filterFields.map(ff => (
+              <select key={ff.label} className={`filter-select ${fAttrs[ff.label] ? 'filter-on' : ''}`} value={fAttrs[ff.label] || ''} onChange={e => setAttr(ff.label, e.target.value)}
+                title={`Filter by the ClickUp field “${ff.label}” (on ${ff.lists.map(id => meta.lists.find(l => l.id === id)?.name).filter(Boolean).join(', ')})`}>
+                <option value="">{ff.label}: any</option>
+                <option value="__none">{ff.label}: not set</option>
+                {ff.options.map(o => <option key={o.id} value={o.name}>{ff.label}: {o.name}</option>)}
+              </select>
+            ))}
+            {activeFilters > 0 && <button className="btn btn-ghost btn-sm" onClick={clearFilters}>Clear ({activeFilters})</button>}
           </div>
         )}
 
         {meta && view === 'calendar' && <Legend meta={meta} />}
 
         {view === 'backlog' && meta
-          ? <BacklogView items={filtered} lists={meta.lists} onOpen={setSelectedId} onSchedule={scheduleTo} />
+          ? <BacklogView items={filtered} meta={meta} onOpen={setSelectedId} onSchedule={scheduleTo} />
           : view === 'list'
           ? <ListView items={scoped} onOpen={setSelectedId} onToggleDone={toggleDone} />
           : month

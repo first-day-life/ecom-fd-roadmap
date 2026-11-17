@@ -29,6 +29,8 @@ export interface Initiative {
   notes: string;             // markdown description
   tags: string[];
   createdAt: string;         // ISO
+  /** Filterable ClickUp fields (ROCK, TACTIC, Task Category, …) → selected option names / people */
+  attrs: Record<string, string[]>;
 }
 
 /** Fields the browser may send when creating / updating an initiative. */
@@ -63,8 +65,15 @@ export interface ListMeta {
   monthOptions: string[];         // 'YYYY-MM' values when the month field is a dropdown; empty = any month
 }
 
+export interface FilterField {
+  label: string;                       // e.g. "ROCK"
+  options: FieldOption[];              // union across lists (people fields: members)
+  lists: string[];                     // list ids that have this field
+}
+
 export interface RoadmapMeta {
   lists: ListMeta[];
+  filterFields: FilterField[];
   defaultListId: string;          // where "+ Add" creates tasks
   requestListId: string;          // where submitted requests are created
   pillars: FieldOption[];         // union across lists
