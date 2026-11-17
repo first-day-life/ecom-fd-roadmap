@@ -48,29 +48,46 @@ function emailAllowed(email: string): boolean {
 
 // --- Identity calls --------------------------------------------------------
 
-const identityBase = (origin: string) => (env('IDENTITY_URL') || `${origin}/.netlify/identity`).replace(/\/$/, '');
+/** Identity endpoint. Prefer an explicit override, then the request's public host, then Netlify's URL. */
+function identityBase(req: NextRequest): string {
+  const override = env('IDENTITY_URL');
+  if (override) return override.replace(/\/$/, '');
+  const host = req.headers.get('x-forwarded-host') || req.headers.get('host');
+  const proto = req.headers.get('x-forwarded-proto') || req.nextUrl.protocol.replace(':', '') || 'https';
+  if (host) return `${proto}://${host}/.netlify/identity`;
+  const site = env('URL');
+  return `${site || req.nextUrl.origin}/.netlify/identity`;
+}
+
+/** Why the last verification failed — surfaced on the sign-in page to make problems diagnosable. */
+type Verify = { email: string } | { error: string };
 
 const verified = new Map<string, { email: string; at: number }>();
 
-async function identityUser(origin: string, token: string): Promise<{ email: string } | null> {
+async function identityUser(req: NextRequest, token: string): Promise<Verify> {
   const hit = verified.get(token);
   if (hit && Date.now() - hit.at < VERIFY_TTL) return { email: hit.email };
+  const url = `${identityBase(req)}/user`;
   try {
-    const res = await fetch(`${identityBase(origin)}/user`, { headers: { Authorization: `Bearer ${token}` }, cache: 'no-store' });
-    if (!res.ok) { verified.delete(token); return null; }
-    const u = await res.json();
-    if (!u?.email) return null;
+    const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` }, cache: 'no-store' });
+    const text = await res.text();
+    if (!res.ok) { verified.delete(token); return { error: `Identity ${res.status} from ${url}: ${text.slice(0, 200)}` }; }
+    let u: any = {};
+    try { u = JSON.parse(text); } catch { return { error: `Identity returned non-JSON from ${url}: ${text.slice(0, 120)}` }; }
+    if (!u?.email) return { error: 'Identity user has no email' };
     if (verified.size > 500) verified.clear();
     verified.set(token, { email: u.email, at: Date.now() });
     return { email: u.email };
-  } catch {
-    return null;
+  } catch (e: any) {
+    return { error: `Could not reach Identity at ${url}: ${e?.message || e}` };
   }
 }
 
-async function refreshTokens(origin: string, refreshToken: string): Promise<{ access_token: string; refresh_token: string; expires_in: number } | null> {
+const ok = (v: Verify): v is { email: string } => 'email' in v;
+
+async function refreshTokens(req: NextRequest, refreshToken: string): Promise<{ access_token: string; refresh_token: string; expires_in: number } | null> {
   try {
-    const res = await fetch(`${identityBase(origin)}/token`, {
+    const res = await fetch(`${identityBase(req)}/token`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: `grant_type=refresh_token&refresh_token=${encodeURIComponent(refreshToken)}`,
@@ -102,7 +119,7 @@ function page(status: number, title: string, body: string) {
 <style>body{font-family:Inter,system-ui,sans-serif;background:#f8f9fb;color:#1a1d23;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;padding:16px}
 .card{background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:28px 32px;max-width:420px;width:100%}h1{font-size:18px;margin:0 0 8px}p{font-size:14px;color:#6b7280;line-height:1.6;margin:0 0 16px}
 .btn{display:inline-flex;align-items:center;gap:10px;background:#0f1117;color:#fff;border:none;border-radius:8px;padding:10px 16px;font-size:14px;font-weight:600;cursor:pointer;text-decoration:none}
-.btn.ghost{background:#fff;color:#374151;border:1px solid #e5e7eb}.err{color:#dc2626;font-size:13px;margin-top:12px;min-height:1em}</style></head>
+.btn.ghost{background:#fff;color:#374151;border:1px solid #e5e7eb}.err{color:#dc2626;font-size:13px;margin-top:12px;min-height:1em;word-break:break-word;white-space:pre-wrap}</style></head>
 <body><div class="card">${body}</div></body></html>`;
   return new NextResponse(html, { status, headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' } });
 }
@@ -118,14 +135,19 @@ function signInPage() {
 (function(){
   var err = document.getElementById('err');
   var h = new URLSearchParams(location.hash.slice(1));
-  if (h.get('error')) { err.textContent = 'Sign-in failed: ' + (h.get('error_description') || h.get('error')); history.replaceState(null,'',location.pathname+location.search); }
+  var q = new URLSearchParams(location.search);
+  var hashErr = h.get('error') || q.get('error');
+  if (hashErr) {
+    err.textContent = 'Sign-in failed — ' + hashErr + ': ' + (h.get('error_description') || q.get('error_description') || '(no description)');
+    history.replaceState(null,'',location.pathname);
+  }
   if (h.get('access_token')) {
     err.style.color = '#6b7280'; err.textContent = 'Signing you in…';
     fetch('/auth/session', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin',
       body: JSON.stringify({ access_token: h.get('access_token'), refresh_token: h.get('refresh_token'), expires_in: h.get('expires_in') }) })
       .then(function(r){ return r.json().then(function(d){ return { ok: r.ok, d: d }; }); })
       .then(function(x){
-        if (!x.ok) { err.style.color=''; err.textContent = x.d.error || 'Sign-in failed'; history.replaceState(null,'',location.pathname); return; }
+        if (!x.ok) { err.style.color=''; err.textContent = (x.d.error || 'Sign-in failed') + (x.d.detail ? ' Details: ' + x.d.detail : ''); history.replaceState(null,'',location.pathname); return; }
         var back = sessionStorage.getItem('rm_return') || '/'; sessionStorage.removeItem('rm_return');
         location.replace(back);
       })
@@ -149,7 +171,7 @@ function forbiddenPage(email: string) {
 // --- Middleware ------------------------------------------------------------
 
 export async function middleware(req: NextRequest) {
-  const { pathname, origin } = req.nextUrl;
+  const { pathname } = req.nextUrl;
 
   if (!authRequired()) return NextResponse.next();
 
@@ -157,8 +179,10 @@ export async function middleware(req: NextRequest) {
   if (pathname === '/auth/session' && req.method === 'POST') {
     let body: any = {};
     try { body = await req.json(); } catch { /* empty */ }
-    const user = body?.access_token ? await identityUser(origin, String(body.access_token)) : null;
-    if (!user) return NextResponse.json({ error: 'Could not verify your sign-in. Please try again.' }, { status: 401 });
+    if (!body?.access_token) return NextResponse.json({ error: 'No access token received from the sign-in redirect.' }, { status: 400 });
+    const v = await identityUser(req, String(body.access_token));
+    if (!ok(v)) return NextResponse.json({ error: 'Could not verify your sign-in.', detail: v.error }, { status: 401 });
+    const user = v;
     if (!emailAllowed(user.email)) return NextResponse.json({ error: `${user.email} doesn't have access to this roadmap.` }, { status: 403 });
     const res = NextResponse.json({ ok: true, email: user.email });
     setSession(res, req, body);
@@ -176,10 +200,10 @@ export async function middleware(req: NextRequest) {
   let refreshed = null as Awaited<ReturnType<typeof refreshTokens>>;
   const at = req.cookies.get(AT)?.value;
   const rt = req.cookies.get(RT)?.value;
-  if (at) user = await identityUser(origin, at);
+  if (at) { const v = await identityUser(req, at); if (ok(v)) user = v; }
   if (!user && rt) {
-    refreshed = await refreshTokens(origin, rt);
-    if (refreshed) user = await identityUser(origin, refreshed.access_token);
+    refreshed = await refreshTokens(req, rt);
+    if (refreshed) { const v = await identityUser(req, refreshed.access_token); if (ok(v)) user = v; }
   }
 
   if (!user) {
