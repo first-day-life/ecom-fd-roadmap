@@ -38,19 +38,18 @@ No token handy? Set `CLICKUP_MOCK=1` in `.env.local` to run against built-in sam
 ## Deploy (Netlify)
 
 1. Import the GitHub repo in Netlify. Next.js is auto-detected (`netlify.toml` sets the build).
-2. Add the environment variables from `.env.local.example`. At minimum: `ACCESS_TOKEN`, `CLICKUP_API_TOKEN`, `CLICKUP_FOLDER_ID`, `APPROVER_PASSWORD`.
+2. Add the environment variables from `.env.local.example`. At minimum: `CLICKUP_API_TOKEN`, `CLICKUP_FOLDER_ID`, `APPROVER_PASSWORD`. Enable **Identity** with the **Google** provider (see Access below).
 3. Deploy, then open `/config` to verify.
 
 ClickUp responses are cached on the server for 20 seconds (lists and fields for 5 minutes), so page loads stay fast and well inside Netlify's function timeout.
 
-## Access (temporary token gate)
+## Access — Google sign-in (Netlify Identity)
 
-Until real authentication is added, the whole site (pages + API) sits behind one long shared token (`src/middleware.ts`):
+The whole site and API require a Google sign-in through **Netlify Identity**, limited to company email domains (`src/middleware.ts`).
 
-- Set `ACCESS_TOKEN` (at least 32 characters; `openssl rand -hex 32`). In production the site **refuses to serve** without it.
-- Share the link `https://<site>/?token=<ACCESS_TOKEN>`. The first visit sets a 30-day httpOnly cookie and strips the token from the URL.
-- Scripts can send `Authorization: Bearer <ACCESS_TOKEN>` instead.
-- Rotating `ACCESS_TOKEN` logs everyone out.
-- Locally, leaving `ACCESS_TOKEN` empty disables the gate.
-
-> ⚠️ This is a stopgap. Everyone shares one token, there's no per-user identity or audit trail, and anyone who has the link can edit those ClickUp lists. Replace it with real per-user auth.
+- Netlify → **Identity**: enabled, with **External providers → Google** turned on.
+- `ALLOWED_EMAIL_DOMAINS` (default `firstday.com`): only these domains get in. `ALLOWED_EMAILS` can add individual addresses.
+- Signed-out visitors see a "Sign in with Google" page, and the API returns 401. Sessions live in httpOnly cookies and refresh automatically.
+- The middleware re-checks each session token with Identity (cached for up to 5 minutes per server instance). Netlify's own `/.netlify/*` endpoints are left untouched.
+- Locally (`npm run dev`) sign-in is off unless you set `AUTH_REQUIRED=1`. Netlify Identity only exists on the deployed site.
+- `/auth/me` returns the signed-in email; `/auth/logout` signs out.

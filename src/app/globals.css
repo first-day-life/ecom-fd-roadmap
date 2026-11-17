@@ -486,3 +486,7 @@ button.crumb:hover { background: #f3f4f6; color: #111827; }
 .prio-normal { background: #e0ecff; color: #1d4ed8; }
 .prio-low { background: #f3f4f6; color: #6b7280; }
 .prio-none { background: transparent; color: #c0c4cc; font-weight: 500; }
+
+/* Signed-in user */
+.auth-status { display: inline-flex; align-items: center; gap: 8px; margin-left: 6px; padding-left: 10px; border-left: 1px solid #e5e7eb; }
+.auth-email { font-size: 12px; color: #6b7280; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

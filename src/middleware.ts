@@ -1,96 +1,217 @@
-// TEMPORARY access gate: a single long shared token, passed once as a URL parameter.
+// Access control: Google sign-in through Netlify Identity, limited to allowed email domains.
 //
-//   https://<site>/?token=<ACCESS_TOKEN>
+// Flow
+//   1. Signed-out visitors get a sign-in page (pages) or 401 JSON (API).
+//   2. "Sign in with Google" → /.netlify/identity/authorize?provider=google → Google →
+//      back to the site with #access_token=… in the URL hash.
+//   3. The sign-in page posts those tokens to /auth/session. The server checks them with
+//      Netlify Identity (/.netlify/identity/user), checks the email domain, and stores them
+//      in httpOnly cookies.
+//   4. Every request: the access token is re-checked with Identity (cached briefly); when
+//      it has expired, the refresh token gets a new one transparently.
 //
-// A matching token sets an httpOnly cookie (30 days) and redirects to the same URL
-// without the token, so it doesn't linger in the address bar. Every page and API
-// route then requires that cookie, or the token as ?token= / an
-// "Authorization: Bearer <token>" header for scripts.
-//
-// Replace with real per-user authentication. Until then, rotating ACCESS_TOKEN
-// logs everyone out.
+// Env
+//   ALLOWED_EMAIL_DOMAINS  comma-separated, default "firstday.com"
+//   ALLOWED_EMAILS         optional comma-separated extra addresses (e.g. contractors)
+//   AUTH_REQUIRED=1        enforce sign-in outside production too (local dev is open by default)
+//   IDENTITY_URL           override the Identity endpoint (default: <site>/.netlify/identity) — for testing
 
 import { NextRequest, NextResponse } from 'next/server';
 
-const COOKIE = 'roadmap_access';
-const MAX_AGE = 60 * 60 * 24 * 30; // 30 days
+const AT = 'rm_at';                 // Identity access token (JWT, ~1h)
+const RT = 'rm_rt';                 // Identity refresh token
+const RT_MAX_AGE = 60 * 60 * 24 * 30;
+const VERIFY_TTL = 5 * 60 * 1000;   // re-check a token with Identity at most every 5 min per instance
 
-/** Constant-time string comparison (Edge runtime has no crypto.timingSafeEqual). */
-function safeEqual(a: string, b: string): boolean {
-  if (a.length !== b.length) return false;
-  let diff = 0;
-  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
-  return diff === 0;
-}
-
-function deny(req: NextRequest, status: number, message: string) {
-  if (req.nextUrl.pathname.startsWith('/api/')) {
-    return NextResponse.json({ error: message }, { status });
-  }
-  const html = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Roadmap — access required</title>
-<style>body{font-family:system-ui,sans-serif;background:#f8f9fb;color:#1a1d23;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;padding:16px}
-.card{background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:28px 32px;max-width:420px}h1{font-size:18px;margin:0 0 8px}p{font-size:14px;color:#6b7280;line-height:1.6;margin:0}</style></head>
-<body><div class="card"><h1>Access required</h1><p>${message}</p></div></body></html>`;
-  return new NextResponse(html, { status, headers: { 'content-type': 'text/html; charset=utf-8' } });
-}
-
-/** Read an env var at runtime. On Netlify, middleware runs as an Edge Function where
- *  variables are also exposed via the global `Netlify.env`, so check both. */
 function env(name: string): string {
   const fromProcess = typeof process !== 'undefined' ? process.env?.[name] : undefined;
   if (fromProcess) return fromProcess.trim();
   try {
-    const nf = (globalThis as any).Netlify;
-    const v = nf?.env?.get?.(name);
+    const v = (globalThis as any).Netlify?.env?.get?.(name);
     if (v) return String(v).trim();
   } catch { /* not on Netlify */ }
   return '';
 }
 
-export function middleware(req: NextRequest) {
-  const expected = env('ACCESS_TOKEN');
+const csv = (v: string) => v.split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
 
-  if (!expected) {
-    // Fail closed in production; stay open for local development.
-    if (process.env.NODE_ENV === 'production') {
-      return deny(req, 503, 'This site is not configured yet (ACCESS_TOKEN is not set).');
-    }
-    return NextResponse.next();
+function authRequired(): boolean {
+  return process.env.NODE_ENV === 'production' || env('AUTH_REQUIRED') === '1';
+}
+
+function emailAllowed(email: string): boolean {
+  const e = email.toLowerCase();
+  if (csv(env('ALLOWED_EMAILS')).includes(e)) return true;
+  const domains = csv(env('ALLOWED_EMAIL_DOMAINS') || 'firstday.com');
+  return domains.some(d => e.endsWith('@' + d));
+}
+
+// --- Identity calls --------------------------------------------------------
+
+const identityBase = (origin: string) => (env('IDENTITY_URL') || `${origin}/.netlify/identity`).replace(/\/$/, '');
+
+const verified = new Map<string, { email: string; at: number }>();
+
+async function identityUser(origin: string, token: string): Promise<{ email: string } | null> {
+  const hit = verified.get(token);
+  if (hit && Date.now() - hit.at < VERIFY_TTL) return { email: hit.email };
+  try {
+    const res = await fetch(`${identityBase(origin)}/user`, { headers: { Authorization: `Bearer ${token}` }, cache: 'no-store' });
+    if (!res.ok) { verified.delete(token); return null; }
+    const u = await res.json();
+    if (!u?.email) return null;
+    if (verified.size > 500) verified.clear();
+    verified.set(token, { email: u.email, at: Date.now() });
+    return { email: u.email };
+  } catch {
+    return null;
   }
-  if (expected.length < 32) {
-    return deny(req, 503, 'ACCESS_TOKEN is too short. Use at least 32 characters (e.g. openssl rand -hex 32).');
-  }
+}
 
-  const urlToken = req.nextUrl.searchParams.get('token') || '';
-  const header = req.headers.get('authorization') || '';
-  const bearer = header.startsWith('Bearer ') ? header.slice(7) : '';
-  const cookie = req.cookies.get(COOKIE)?.value || '';
-
-  // First visit with ?token=… → remember it in a cookie and strip it from the URL
-  if (urlToken && safeEqual(urlToken, expected)) {
-    const clean = req.nextUrl.clone();
-    clean.searchParams.delete('token');
-    const res = req.method === 'GET' && !req.nextUrl.pathname.startsWith('/api/')
-      ? NextResponse.redirect(clean)
-      : NextResponse.next();
-    res.cookies.set(COOKIE, expected, {
-      httpOnly: true,
-      secure: req.nextUrl.protocol === 'https:',
-      sameSite: 'lax',
-      path: '/',
-      maxAge: MAX_AGE,
+async function refreshTokens(origin: string, refreshToken: string): Promise<{ access_token: string; refresh_token: string; expires_in: number } | null> {
+  try {
+    const res = await fetch(`${identityBase(origin)}/token`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: `grant_type=refresh_token&refresh_token=${encodeURIComponent(refreshToken)}`,
+      cache: 'no-store',
     });
+    if (!res.ok) return null;
+    const t = await res.json();
+    return t?.access_token ? t : null;
+  } catch {
+    return null;
+  }
+}
+
+function setSession(res: NextResponse, req: NextRequest, t: { access_token: string; refresh_token?: string; expires_in?: number }) {
+  const secure = req.nextUrl.protocol === 'https:';
+  res.cookies.set(AT, t.access_token, { httpOnly: true, secure, sameSite: 'lax', path: '/', maxAge: Math.max(60, Number(t.expires_in) || 3600) });
+  if (t.refresh_token) res.cookies.set(RT, t.refresh_token, { httpOnly: true, secure, sameSite: 'lax', path: '/', maxAge: RT_MAX_AGE });
+}
+
+function clearSession(res: NextResponse) {
+  res.cookies.set(AT, '', { path: '/', maxAge: 0 });
+  res.cookies.set(RT, '', { path: '/', maxAge: 0 });
+}
+
+// --- Pages -----------------------------------------------------------------
+
+function page(status: number, title: string, body: string) {
+  const html = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Roadmap — ${title}</title>
+<style>body{font-family:Inter,system-ui,sans-serif;background:#f8f9fb;color:#1a1d23;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;padding:16px}
+.card{background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:28px 32px;max-width:420px;width:100%}h1{font-size:18px;margin:0 0 8px}p{font-size:14px;color:#6b7280;line-height:1.6;margin:0 0 16px}
+.btn{display:inline-flex;align-items:center;gap:10px;background:#0f1117;color:#fff;border:none;border-radius:8px;padding:10px 16px;font-size:14px;font-weight:600;cursor:pointer;text-decoration:none}
+.btn.ghost{background:#fff;color:#374151;border:1px solid #e5e7eb}.err{color:#dc2626;font-size:13px;margin-top:12px;min-height:1em}</style></head>
+<body><div class="card">${body}</div></body></html>`;
+  return new NextResponse(html, { status, headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' } });
+}
+
+function signInPage() {
+  const domains = (env('ALLOWED_EMAIL_DOMAINS') || 'firstday.com').split(',').map(d => '@' + d.trim()).join(', ');
+  return page(401, 'Sign in', `
+<h1>firstday.com — Roadmap</h1>
+<p>Sign in with your Google account (${domains}) to continue.</p>
+<button class="btn" id="go">Sign in with Google</button>
+<div class="err" id="err"></div>
+<script>
+(function(){
+  var err = document.getElementById('err');
+  var h = new URLSearchParams(location.hash.slice(1));
+  if (h.get('error')) { err.textContent = 'Sign-in failed: ' + (h.get('error_description') || h.get('error')); history.replaceState(null,'',location.pathname+location.search); }
+  if (h.get('access_token')) {
+    err.style.color = '#6b7280'; err.textContent = 'Signing you in…';
+    fetch('/auth/session', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin',
+      body: JSON.stringify({ access_token: h.get('access_token'), refresh_token: h.get('refresh_token'), expires_in: h.get('expires_in') }) })
+      .then(function(r){ return r.json().then(function(d){ return { ok: r.ok, d: d }; }); })
+      .then(function(x){
+        if (!x.ok) { err.style.color=''; err.textContent = x.d.error || 'Sign-in failed'; history.replaceState(null,'',location.pathname); return; }
+        var back = sessionStorage.getItem('rm_return') || '/'; sessionStorage.removeItem('rm_return');
+        location.replace(back);
+      })
+      .catch(function(){ err.style.color=''; err.textContent = 'Sign-in failed — please try again.'; });
+  }
+  document.getElementById('go').onclick = function(){
+    try { sessionStorage.setItem('rm_return', location.pathname + location.search); } catch(e) {}
+    location.href = '/.netlify/identity/authorize?provider=google';
+  };
+})();
+</script>`);
+}
+
+function forbiddenPage(email: string) {
+  return page(403, 'Not allowed', `
+<h1>Not allowed</h1>
+<p>You're signed in as <strong>${email.replace(/[<>&"]/g, '')}</strong>, which doesn't have access to this roadmap.</p>
+<a class="btn ghost" href="/auth/logout">Sign out and use another account</a>`);
+}
+
+// --- Middleware ------------------------------------------------------------
+
+export async function middleware(req: NextRequest) {
+  const { pathname, origin } = req.nextUrl;
+
+  if (!authRequired()) return NextResponse.next();
+
+  // Sign-in completion: browser posts the tokens from the OAuth redirect hash
+  if (pathname === '/auth/session' && req.method === 'POST') {
+    let body: any = {};
+    try { body = await req.json(); } catch { /* empty */ }
+    const user = body?.access_token ? await identityUser(origin, String(body.access_token)) : null;
+    if (!user) return NextResponse.json({ error: 'Could not verify your sign-in. Please try again.' }, { status: 401 });
+    if (!emailAllowed(user.email)) return NextResponse.json({ error: `${user.email} doesn't have access to this roadmap.` }, { status: 403 });
+    const res = NextResponse.json({ ok: true, email: user.email });
+    setSession(res, req, body);
     return res;
   }
 
-  if ((cookie && safeEqual(cookie, expected)) || (bearer && safeEqual(bearer, expected))) {
-    return NextResponse.next();
+  if (pathname === '/auth/logout') {
+    const res = NextResponse.redirect(new URL('/', req.url));
+    clearSession(res);
+    return res;
   }
 
-  return deny(req, 401, 'Open this site using the link with the access token (…?token=…). Ask the roadmap owner for the link.');
+  // Normal request: check (and if needed refresh) the session
+  let user = null as { email: string } | null;
+  let refreshed = null as Awaited<ReturnType<typeof refreshTokens>>;
+  const at = req.cookies.get(AT)?.value;
+  const rt = req.cookies.get(RT)?.value;
+  if (at) user = await identityUser(origin, at);
+  if (!user && rt) {
+    refreshed = await refreshTokens(origin, rt);
+    if (refreshed) user = await identityUser(origin, refreshed.access_token);
+  }
+
+  if (!user) {
+    if (pathname.startsWith('/api/') || pathname.startsWith('/auth/')) {
+      return NextResponse.json({ error: 'Sign in required' }, { status: 401 });
+    }
+    const res = signInPage();
+    if (at || rt) clearSession(res);
+    return res;
+  }
+
+  if (!emailAllowed(user.email)) {
+    return pathname.startsWith('/api/') || pathname.startsWith('/auth/')
+      ? NextResponse.json({ error: 'Not allowed' }, { status: 403 })
+      : forbiddenPage(user.email);
+  }
+
+  if (pathname === '/auth/me') {
+    const res = NextResponse.json({ email: user.email });
+    if (refreshed) setSession(res, req, refreshed);
+    return res;
+  }
+
+  // Pass the verified email to route handlers (client-supplied values are overwritten)
+  const headers = new Headers(req.headers);
+  headers.set('x-roadmap-user', user.email);
+  const res = NextResponse.next({ request: { headers } });
+  if (refreshed) setSession(res, req, refreshed);
+  return res;
 }
 
 export const config = {
-  // Everything except Next.js build assets and the favicon
-  matcher: ['/((?!_next/static|_next/image|favicon.ico).*)'],
+  // Everything except Next.js build assets, the favicon and Netlify's own endpoints (Identity)
+  matcher: ['/((?!_next/static|_next/image|favicon.ico|\\.netlify/).*)'],
 };

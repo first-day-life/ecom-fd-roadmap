@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useMemo, useRef, createContext, useContext } from 'react';
 import Link from 'next/link';
+import { AuthStatus } from '@/components/AuthStatus';
 import type { Initiative, InitiativeInput, RoadmapMeta, ListMeta } from '@/lib/types';
 import { PRIORITIES } from '@/lib/types';
 import {
@@ -1293,6 +1294,7 @@ export default function RoadmapPage() {
             <Link href="/config" className="btn btn-ghost btn-sm" title="Configuration">⚙</Link>
             <button className="btn btn-ghost btn-sm" onClick={() => exportCSV(scoped)}>↓ CSV</button>
             {meta && <button className="btn btn-primary btn-sm" onClick={() => setAddDefaults(month ? { roadmapMonth: month } : {})}>+ Add</button>}
+            <AuthStatus />
           </div>
         </div>
 
