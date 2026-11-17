@@ -548,3 +548,6 @@ button.crumb:hover { background: #f3f4f6; color: #111827; }
 .tt-chip { --c: #8b5cf6; }
 .tt-missing { --c: #f59e0b; font-style: italic; }
 .field-note { font-weight: 400; color: #d97706; font-size: 11px; }
+.bar-live { text-decoration: none; cursor: pointer; background: repeating-linear-gradient(135deg, #fee2e2 0 6px, #fef2f2 6px 12px); border-color: #fca5a5; border-left-color: #ef4444; color: #7f1d1d; }
+.test-targets { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; font-size: 11px; }
+.test-targets em { font-style: normal; font-weight: 700; color: #6b7280; margin-right: 2px; }

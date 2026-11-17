@@ -87,42 +87,84 @@ function isTestItem(i: Initiative): boolean {
 }
 
 const EVERYTHING = new Set(['sitewide', 'site-wide', 'all', '*', 'global', 'everything']);
+const slug = (x: string) => x.trim().replace(/\s+/g, '-');
 
-/** Split "🧪 Test Targeting" into normalized targets (comma/semicolon/newline separated). */
-function targetsOf(i: Initiative): string[] {
-  return (i.testTargeting || '')
-    .split(/[,;\n]+/)
-    .map(t => t.trim().toLowerCase()
-      .replace(/^https?:\/\/(www\.)?[^/\s]+/, '')   // drop protocol + domain
-      .replace(/[?#].*$/, '')                          // drop query/hash
-      .replace(/\s+/g, ' ')
-      .replace(/(.)\/$/, '$1'))                       // trailing slash
-    .filter(Boolean);
-}
-
-/** Targets two items share: equal, sitewide, or URL paths where one contains the other. */
-function sharedTargets(a: string[], b: string[]): string[] {
-  const out = new Set<string>();
-  for (const x of a) for (const y of b) {
-    if (x === y || EVERYTHING.has(x) || EVERYTHING.has(y)) out.add(x === y ? x : EVERYTHING.has(x) ? y : x);
-    else if (x.startsWith('/') && y.startsWith('/') && (x.startsWith(y + '/') || y.startsWith(x + '/'))) out.add(x.length < y.length ? x : y);
-  }
+/**
+ * Normalize one target and add path aliases for common shorthand:
+ *   "Homepage …" → "/" · "PDP: x" → "/products/x" · "PDP" → "/products"
+ *   "Collection: x" / "PLP: x" → "/collections/x" · "LP: x" / "Page: x" → "/pages/x" · "Cart" → "/cart"
+ * "~text" means "URL contains text" (from Intelligems 'contains' rules).
+ */
+function normTargets(raw: string): string[] {
+  const t = raw.trim().toLowerCase()
+    .replace(/^https?:\/\/(www\.)?[^/\s]+/, '')
+    .replace(/[?#].*$/, '')
+    .replace(/\s+/g, ' ')
+    .replace(/(.)\/$/, '$1');
+  if (!t) return [];
+  const out = new Set([t]);
+  let m: RegExpMatchArray | null;
+  if (t === '/' || /^(homepage|home page|home)\b/.test(t)) out.add('/');
+  if ((m = t.match(/^(pdp|pdps|product|products)\s*[:\-–]\s*(.+)$/))) out.add('/products/' + slug(m[2]));
+  else if (/^(pdp|pdps|all pdps|product pages?|products)$/.test(t)) out.add('/products');
+  if ((m = t.match(/^(collection|collections|plp)\s*[:\-–]\s*(.+)$/))) out.add('/collections/' + slug(m[2]));
+  else if (/^(plp|plps|collections|collection pages?)$/.test(t)) out.add('/collections');
+  if ((m = t.match(/^(lp|page|pages|landing page)\s*[:\-–]\s*(.+)$/))) out.add('/pages/' + slug(m[2]));
+  if (t === 'cart') out.add('/cart');
   return Array.from(out);
 }
 
-interface Conflict { other: Initiative; shared: string[]; from: string; to: string }
+/** Split "🧪 Test Targeting" text into normalized targets (comma/semicolon/newline separated). */
+function targetsOf(i: Initiative): string[] {
+  return Array.from(new Set((i.testTargeting || '').split(/[,;\n]+/).flatMap(normTargets)));
+}
 
-function findConflicts(items: Initiative[]): Map<string, Conflict[]> {
-  const tests = items.filter(i => !i.done && isTestItem(i) && targetsOf(i).length && spanOf(i));
+/** Targets two sets share: equal, sitewide, URL paths where one contains the other, or "~contains" matches. */
+function sharedTargets(a: string[], b: string[]): string[] {
+  const out = new Set<string>();
+  for (const x of a) for (const y of b) {
+    if (x === y) out.add(x);
+    else if (EVERYTHING.has(x) || EVERYTHING.has(y)) out.add(EVERYTHING.has(x) ? (EVERYTHING.has(y) ? 'sitewide' : y) : x);
+    else if (x.startsWith('~') && !y.startsWith('~') && y.includes(x.slice(1))) out.add(y);
+    else if (y.startsWith('~') && !x.startsWith('~') && x.includes(y.slice(1))) out.add(x);
+    else if (x.startsWith('/') && y.startsWith('/') && x !== '/' && y !== '/' && (x.startsWith(y + '/') || y.startsWith(x + '/'))) out.add(x.length < y.length ? x : y);
+  }
+  return Array.from(out).map(t => (t.startsWith('~') ? `URLs containing “${t.slice(1)}”` : t === '/' ? 'homepage (/)' : t));
+}
+
+/** Something that occupies a page/area for a period: a ClickUp test task or a live Intelligems test. */
+interface TestSlot { id: string; name: string; where: string; kind: 'clickup' | 'intelligems'; targets: string[]; start: string; end: string; url: string }
+interface Conflict { other: TestSlot; shared: string[]; from: string; to: string }
+
+/**
+ * Live Intelligems tests occupy their pages from launch until Intelligems' estimated end
+ * (or 2 weeks from today if there's no estimate), never earlier than today.
+ */
+function liveSlots(tests: LiveTest[]): TestSlot[] {
+  const today = todayStr();
+  return tests.filter(t => t.status === 'started' && t.targets?.length).map(t => {
+    const start = t.startedAt.slice(0, 10);
+    const est = t.estimatedDays?.high ? addDays(start, t.estimatedDays.high) : addDays(today, 14);
+    return { id: 'ig:' + t.id, name: t.name, where: 'Live in Intelligems', kind: 'intelligems' as const, targets: t.targets, start, end: est > today ? est : today, url: t.url };
+  });
+}
+
+function findConflicts(items: Initiative[], live: LiveTest[]): Map<string, Conflict[]> {
+  const slots: TestSlot[] = [
+    ...items.filter(i => !i.done && isTestItem(i) && targetsOf(i).length && spanOf(i)).map(i => {
+      const sp = spanOf(i)!;
+      return { id: i.id, name: i.name, where: i.listName, kind: 'clickup' as const, targets: targetsOf(i), start: sp.start, end: sp.end, url: i.url };
+    }),
+    ...liveSlots(live),
+  ];
   const map = new Map<string, Conflict[]>();
-  for (let x = 0; x < tests.length; x++) for (let y = x + 1; y < tests.length; y++) {
-    const a = tests[x], b = tests[y];
-    const sa = spanOf(a)!, sb = spanOf(b)!;
-    if (!overlaps(sa.start, sa.end, sb.start, sb.end)) continue;
-    const shared = sharedTargets(targetsOf(a), targetsOf(b));
+  for (let x = 0; x < slots.length; x++) for (let y = x + 1; y < slots.length; y++) {
+    const a = slots[x], b = slots[y];
+    if (!overlaps(a.start, a.end, b.start, b.end)) continue;
+    const shared = sharedTargets(a.targets, b.targets);
     if (!shared.length) continue;
-    const from = sa.start > sb.start ? sa.start : sb.start;
-    const to = sa.end < sb.end ? sa.end : sb.end;
+    const from = a.start > b.start ? a.start : b.start;
+    const to = a.end < b.end ? a.end : b.end;
     map.set(a.id, [...(map.get(a.id) || []), { other: b, shared, from, to }]);
     map.set(b.id, [...(map.get(b.id) || []), { other: a, shared, from, to }]);
   }
@@ -132,7 +174,7 @@ function findConflicts(items: Initiative[]): Map<string, Conflict[]> {
 const ConflictCtx = createContext<Map<string, Conflict[]>>(new Map());
 const useConflicts = () => useContext(ConflictCtx);
 const conflictText = (cs: Conflict[]) =>
-  cs.map(c => `⚠️ Conflicts with “${c.other.name}” on ${c.shared.join(', ')} (${shortDate(c.from)} – ${shortDate(c.to)})`).join('\n');
+  cs.map(c => `⚠️ Conflicts with ${c.other.kind === 'intelligems' ? 'live test' : ''} “${c.other.name}” on ${c.shared.join(', ')} (${shortDate(c.from)} – ${shortDate(c.to)})`).join('\n');
 
 function ConflictNote({ id }: { id: string }) {
   const cs = useConflicts().get(id);
@@ -362,8 +404,8 @@ function OverviewView({ months, items, onOpenMonth, onOpenItem }: {
 
 type DragState = { id: string; mode: 'start' | 'end' | 'move'; startX: number; s0: string; e0: string; dS: number; dE: number; moved: boolean };
 
-function MonthView({ monthKey, items, lists, onUpdate, onOpen, onAdd }: {
-  monthKey: string; items: Initiative[]; lists: ListMeta[];
+function MonthView({ monthKey, items, lists, liveTests, onUpdate, onOpen, onAdd }: {
+  monthKey: string; items: Initiative[]; lists: ListMeta[]; liveTests: LiveTest[];
   onUpdate: (id: string, patch: InitiativeInput) => void; onOpen: (id: string) => void;
   onAdd: (defaults: InitiativeInput) => void;
 }) {
@@ -388,6 +430,7 @@ function MonthView({ monthKey, items, lists, onUpdate, onOpen, onAdd }: {
 
   const monthItems = items.filter(i => inMonth(i, monthKey));
   const dated = monthItems.filter(i => { const sp = spanOf(i); return sp && overlaps(sp.start, sp.end, gridStart, gridEnd); });
+  const liveInMonth = liveSlots(liveTests).filter(s => overlaps(s.start, s.end, gridStart, gridEnd));
   const monthOnly = monthItems.filter(i => !spanOf(i));
   const unplanned = items.filter(i => sourceOf(i) === 'none' && !i.done);
   const traySource = tray === 'month' ? monthOnly : tray === 'unplanned' ? unplanned : items.filter(i => !trayOpenOnly || !i.done);
@@ -443,7 +486,7 @@ function MonthView({ monthKey, items, lists, onUpdate, onOpen, onAdd }: {
   };
 
   // Rows: optionally grouped by list
-  type Row = { kind: 'group'; label: string; color: string; n: number } | { kind: 'item'; item: Initiative };
+  type Row = { kind: 'group'; label: string; color: string; n: number } | { kind: 'item'; item: Initiative } | { kind: 'live'; slot: TestSlot };
   const sortKey = (i: Initiative) => spanOf(i)!.start;
   const rows: Row[] = [];
   if (groupByList) {
@@ -456,6 +499,10 @@ function MonthView({ monthKey, items, lists, onUpdate, onOpen, onAdd }: {
   } else {
     [...dated].sort((a, b) => sortKey(a).localeCompare(sortKey(b))).forEach(item => rows.push({ kind: 'item', item }));
   }
+  if (liveInMonth.length) {
+    rows.push({ kind: 'group', label: '🧪 Live in Intelligems', color: '#ef4444', n: liveInMonth.length });
+    liveInMonth.sort((a, b) => a.start.localeCompare(b.start)).forEach(slot => rows.push({ kind: 'live', slot }));
+  }
 
   const done = monthItems.filter(i => i.done).length;
   const groups = new Map<string, { n: number; color: string }>();
@@ -466,15 +513,20 @@ function MonthView({ monthKey, items, lists, onUpdate, onOpen, onAdd }: {
     <div className="month-layout">
       <div className="month-view">
         {(() => {
-          const inMonthConflicts = monthItems.filter(i => conflicts.has(i.id));
-          if (!inMonthConflicts.length) return null;
+          const ids: Array<{ id: string; name: string }> = [
+            ...monthItems.filter(i => conflicts.has(i.id)).map(i => ({ id: i.id, name: i.name })),
+            ...liveInMonth.filter(sl => conflicts.has(sl.id)).map(sl => ({ id: sl.id, name: sl.name })),
+          ];
+          if (!ids.length) return null;
           const seen = new Set<string>();
           const pairs: string[] = [];
-          inMonthConflicts.forEach(i => conflicts.get(i.id)!.forEach(c => {
-            const k = [i.id, c.other.id].sort().join('|');
+          ids.forEach(x => conflicts.get(x.id)!.forEach(c => {
+            if (!overlaps(c.from, c.to, gridStart, gridEnd)) return;
+            const k = [x.id, c.other.id].sort().join('|');
             if (seen.has(k)) return; seen.add(k);
-            pairs.push(`“${i.name}” ↔ “${c.other.name}” on ${c.shared.join(', ')} (${shortDate(c.from)} – ${shortDate(c.to)})`);
+            pairs.push(`“${x.name}” ↔ ${c.other.kind === 'intelligems' ? '🔴 ' : ''}“${c.other.name}” on ${c.shared.join(', ')} (${shortDate(c.from)} – ${shortDate(c.to)})`);
           }));
+          if (!pairs.length) return null;
           return (
             <div className="conflict-banner">
               <strong>⚠️ {pairs.length} test conflict{pairs.length > 1 ? 's' : ''} this month</strong> — tests targeting the same page/area overlap:
@@ -518,6 +570,24 @@ function MonthView({ monthKey, items, lists, onUpdate, onOpen, onAdd }: {
                   <div key={'g' + r.label} className="gantt-group" style={{ gridColumn: `1 / ${nW + 1}`, gridRow: idx + 1 }}>
                     <span className="list-dot" style={{ background: r.color }} />{r.label}<span className="count-badge">{r.n}</span>
                   </div>
+                );
+              }
+              if (r.kind === 'live') {
+                const sl = r.slot;
+                const a = weekIdx(sl.start < gridStart ? gridStart : sl.start);
+                const b = weekIdx(sl.end > gridEnd ? gridEnd : sl.end);
+                const cs = conflicts.get(sl.id);
+                return (
+                  <a key={sl.id} href={sl.url || undefined} target="_blank" rel="noreferrer"
+                    className={`bar bar-live ${sl.start < gridStart ? 'clip-l' : ''} ${sl.end > gridEnd ? 'clip-r' : ''} ${cs ? 'bar-conflict' : ''}`}
+                    style={{ gridColumn: `${a + 1} / ${b + 2}`, gridRow: idx + 1, '--bar': '#ef4444' } as React.CSSProperties}
+                    title={`🧪 Live Intelligems test: ${sl.name}\nLive since ${shortDate(sl.start)} · shown through ${shortDate(sl.end)} (estimated)\n🎯 ${sl.targets.join(', ')}${cs ? '\n' + conflictText(cs) : ''}\nClick to open in Intelligems`}>
+                    {sl.start < gridStart && <span className="bar-arrow">‹</span>}
+                    {cs && <span className="bar-lock">⚠️</span>}
+                    <span className="bar-lock">🔴</span>
+                    <span className="bar-name">{sl.name}</span>
+                    {sl.end > gridEnd && <span className="bar-arrow">›</span>}
+                  </a>
                 );
               }
               const item = r.item;
@@ -841,7 +911,7 @@ interface TestResults {
 }
 interface LiveTest {
   id: string; name: string; status: 'started' | 'paused'; type: string; typeLabel: string;
-  startedAt: string; pausedAt: string; daysRunning: number; url: string;
+  startedAt: string; pausedAt: string; daysRunning: number; url: string; targets: string[];
   variations: Array<{ name: string; percentage: number; isControl: boolean }>;
   estimatedDays: { low: number | null; high: number | null } | null;
   results: TestResults | null;
@@ -909,14 +979,8 @@ function ageBand(t: LiveTest): 'fresh' | 'mid' | 'long' | 'over' {
   return 'fresh';
 }
 
-function TestsView() {
-  const [data, setData] = useState<{ configured: boolean; tests: LiveTest[]; error?: string } | null>(null);
-  useEffect(() => {
-    fetch('/api/tests', { cache: 'no-store' })
-      .then(r => r.json())
-      .then(setData)
-      .catch(e => setData({ configured: true, tests: [], error: String(e) }));
-  }, []);
+function TestsView({ data }: { data: { configured: boolean; tests: LiveTest[]; error?: string } | null }) {
+  const conflicts = useConflicts();
 
   if (!data) return <div className="loading-screen" style={{ minHeight: '30vh' }}><div className="spinner" /></div>;
   if (!data.configured) {
@@ -963,6 +1027,19 @@ function TestsView() {
           <div className="test-vars">
             {t.variations.map(v => <span key={v.name} className={`test-var ${v.isControl ? 'is-control' : ''}`}>{v.isControl ? '🅰️' : '🅱️'} {v.name} · {v.percentage}%</span>)}
           </div>
+          {t.targets?.length > 0 && (
+            <div className="test-targets">
+              <em>🎯 Targets</em>
+              {t.targets.slice(0, 6).map(x => <span key={x} className="test-var">{x.startsWith('~') ? `URL contains “${x.slice(1)}”` : x === '/' ? 'homepage (/)' : x}</span>)}
+              {t.targets.length > 6 && <span className="res-dim">+{t.targets.length - 6} more</span>}
+            </div>
+          )}
+          {(conflicts.get('ig:' + t.id) || []).length > 0 && (
+            <div className="conflict-banner">
+              <strong>⚠️ Overlaps</strong>
+              <ul>{conflicts.get('ig:' + t.id)!.map(c => <li key={c.other.id}>{c.other.kind === 'intelligems' ? 'Live test' : `Planned in ${c.other.where}`}: “{c.other.name}” on {c.shared.join(', ')} ({shortDate(c.from)} – {shortDate(c.to)})</li>)}</ul>
+            </div>
+          )}
           {t.results && <ResultsBlock r={t.results} />}
         </div>
       </div>
@@ -1181,7 +1258,7 @@ function DrawerConflicts({ id }: { id: string }) {
   return (
     <div className="conflict-banner" style={{ marginBottom: 14 }}>
       <strong>⚠️ Test conflict{cs.length > 1 ? 's' : ''}</strong>
-      <ul>{cs.map(c => <li key={c.other.id}>“{c.other.name}” ({c.other.listName}) also targets <strong>{c.shared.join(', ')}</strong> {shortDate(c.from)} – {shortDate(c.to)}</li>)}</ul>
+      <ul>{cs.map(c => <li key={c.other.id}>{c.other.kind === 'intelligems' ? '🔴 Live test ' : ''}“{c.other.name}” ({c.other.where}) also targets <strong>{c.shared.join(', ')}</strong> {shortDate(c.from)} – {shortDate(c.to)}{c.other.kind === 'intelligems' && c.other.url ? <> · <a href={c.other.url} target="_blank" rel="noreferrer">open ↗</a></> : null}</li>)}</ul>
     </div>
   );
 }
@@ -1497,8 +1574,18 @@ export default function RoadmapPage() {
     updateItem(id, patch);
   }, [items, listOf, updateItem]);
 
-  // Conflicts are computed across all items (not just the filtered view)
-  const conflicts = useMemo(() => findConflicts(items), [items]);
+  // Live Intelligems tests (for the 🧪 tab and conflict checks); optional — app works without them
+  const [tests, setTests] = useState<{ configured: boolean; tests: LiveTest[]; error?: string } | null>(null);
+  useEffect(() => {
+    fetch('/api/tests', { cache: 'no-store' })
+      .then(r => r.json())
+      .then(setTests)
+      .catch(e => setTests({ configured: true, tests: [], error: String(e) }));
+  }, []);
+  const liveTests = tests?.tests || [];
+
+  // Conflicts are computed across all items (not just the filtered view) plus live tests
+  const conflicts = useMemo(() => findConflicts(items, liveTests), [items, liveTests]);
 
   // --- Colors ---
   const colors = useMemo<Colors>(() => {
@@ -1692,13 +1779,13 @@ export default function RoadmapPage() {
         {meta && view === 'calendar' && <Legend meta={meta} />}
 
         {view === 'tests'
-          ? <TestsView />
+          ? <TestsView data={tests} />
           : view === 'backlog' && meta
           ? <BacklogView items={filtered} meta={meta} onOpen={setSelectedId} onSchedule={scheduleTo} />
           : view === 'list'
           ? <ListView items={scoped} onOpen={setSelectedId} onToggleDone={toggleDone} />
           : month
-            ? <MonthView monthKey={month} items={filtered} lists={meta?.lists || []} onUpdate={updateItem} onOpen={setSelectedId} onAdd={d => setAddDefaults(d)} />
+            ? <MonthView monthKey={month} items={filtered} lists={meta?.lists || []} liveTests={liveTests} onUpdate={updateItem} onOpen={setSelectedId} onAdd={d => setAddDefaults(d)} />
             : <OverviewView months={windowMonths} items={filtered} onOpenMonth={m => navigate({ from, span, month: m })} onOpenItem={setSelectedId} />}
 
         {selected && meta && <Drawer item={selected} meta={meta} monthAround={monthAround} onUpdate={updateItem} onArchive={archiveItem} onClose={() => setSelectedId(null)} />}

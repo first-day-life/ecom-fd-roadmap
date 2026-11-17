@@ -52,7 +52,32 @@ export interface LiveTest {
   estimatedDays: { low: number | null; high: number | null } | null;
   previewPath: string;
   url: string;                   // link to open the test in Intelligems
+  targets: string[];             // pages/areas the test touches: paths ("/products/x"), "~text" (URL contains), or "sitewide"
   results: TestResults | null;
+}
+
+const SITEWIDE_TYPES = new Set(['pricing', 'shipping', 'sitewide', 'onsiteUpsell', 'checkoutBlock', 'postPurchase']);
+
+/** Where a test runs, from its redirects (split-URL tests) and page-targeting rules. */
+function targetsFor(e: any): string[] {
+  const out = new Set<string>();
+  const add = (filter: string | null | undefined, value: string | null | undefined) => {
+    const v = String(value || '').trim();
+    if (!v) return;
+    const isUrlish = v.startsWith('/') || /^https?:\/\//i.test(v);
+    if (filter === 'contains' || !isUrlish) out.add('~' + v.toLowerCase());
+    else out.add(v.replace(/^https?:\/\/[^/]+/i, '').replace(/[?#].*$/, '').replace(/(.)\/$/, '$1').toLowerCase() || '/');
+  };
+  for (const v of e.variations || []) for (const r of v.redirects || []) add(r.filter, r.originUrl);
+  for (const rule of e.experiencePageTargeting || []) {
+    for (const ex of rule.expression || []) {
+      const q = ex?.query;
+      if (q && (q.type === 'urlPath' || q.type === 'url')) add(q.filter === 'contains' ? 'contains' : 'path', q.value);
+    }
+    if (rule.value) add(rule.filterType === 'contains' ? 'contains' : 'path', rule.value);
+  }
+  if (!out.size && SITEWIDE_TYPES.has(e.type)) out.add('sitewide');
+  return Array.from(out);
 }
 
 const API = 'https://api.intelligems.io/v25-10-beta';
@@ -231,6 +256,7 @@ function mapTest(e: any): LiveTest | null {
     estimatedDays: est && (est.low != null || est.high != null) ? { low: est.low ?? null, high: est.high ?? null } : null,
     previewPath: String(e.previewPath || ''),
     url: testUrl(String(e.id)),
+    targets: targetsFor(e),
     results: null,
   };
 }
@@ -259,7 +285,7 @@ function mockTests(): LiveTest[] {
     id, name, status, type, typeLabel: TYPE_LABELS[type] || type, startedAt: ago(days), pausedAt: status === 'paused' ? ago(2) : '',
     daysRunning: status === 'paused' ? days - 2 : days,
     variations: [{ name: 'Control', percentage: 50, isControl: true }, { name: 'Variant B', percentage: 50, isControl: false }],
-    estimatedDays: est ? { low: est[0], high: est[1] } : null, previewPath: '/', url: testUrl(id), results: null,
+    estimatedDays: est ? { low: est[0], high: est[1] } : null, previewPath: '/', url: testUrl(id), targets: [], results: null,
   });
   const raw = (ordersC: number, ordersV: number, m: Record<string, [number, number, number]>, impact = -24373) => ({
     variations: [{ id: 'c', name: 'Control Group', isControl: true, order: 0 }, { id: 'v', name: 'New Group 1', isControl: false, order: 1 }],
@@ -274,13 +300,20 @@ function mockTests(): LiveTest[] {
     t('m1', '[Broad-PDP] 90 Option V2', 'content/url', 22, [14, 28]),
     t('m2', '[Homepage] BF hero: whole family + mystery gift $75', 'content/advanced', 11, null),
     t('m3', '[TDK-BTS] 90 option v3', 'content/url', 1, [21, 35]),
+    t('m5', '[TDK-BTS] vs Preorder LP', 'content/url', 1, null),
     t('m4', '[Checkout] Free shipping threshold $60', 'shipping', 40, [21, 30], 'paused'),
   ];
+  tests[0].targets = ['/products/kids-calming-magnesium', '/products/kids-daily-focus', '~starter-pack'];
+  tests[1].targets = ['/'];
+  tests[2].targets = ['/pages/tdk-behind-the-science-lp'];
+  tests[3].targets = ['/pages/tdk-behind-the-science-lp'];
+  tests[4].targets = ['sitewide'];
   // Real numbers from [Broad-PDP] 90 Option V2 for the first; synthetic for the rest
   tests[0].results = evaluate(raw(4208, 3883, { net_revenue_per_visitor: [-0.034, 0.133, 0.058], net_revenue_per_order: [0.041, 0.966, 0.046], conversion_rate: [-0.073, 0.0002, 0.039] }), 22);
   tests[1].results = evaluate(raw(260, 228, { net_revenue_per_visitor: [0.06, 0.83, 0.09], net_revenue_per_order: [0.01, 0.6, 0.05], conversion_rate: [0.05, 0.86, 0.08] }, 6100), 11);
   tests[2].results = evaluate(raw(14, 11, { net_revenue_per_visitor: [0.01, 0.52, 0.4], net_revenue_per_order: [0.0, 0.5, 0.3], conversion_rate: [0.005, 0.51, 0.35] }, 400), 1);
-  tests[3].results = evaluate(raw(910, 902, { net_revenue_per_visitor: [0.08, 0.98, 0.06], net_revenue_per_order: [0.05, 0.97, 0.04], conversion_rate: [0.02, 0.8, 0.04] }, 12800), 38);
+  tests[3].results = evaluate(raw(12, 9, { net_revenue_per_visitor: [0.0, 0.5, 0.5] }, 0), 1);
+  tests[4].results = evaluate(raw(910, 902, { net_revenue_per_visitor: [0.08, 0.98, 0.06], net_revenue_per_order: [0.05, 0.97, 0.04], conversion_rate: [0.02, 0.8, 0.04] }, 12800), 38);
   return tests;
 }
 
