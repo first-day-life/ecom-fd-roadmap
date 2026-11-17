@@ -122,6 +122,95 @@ function normTargets(raw: string): string[] {
   return Array.from(out);
 }
 
+const splitTargeting = (s: string) => s.split(/[,;\n]+/).map(x => x.trim()).filter(Boolean);
+
+/** Path → the shorthand people type in ClickUp ("/products/x" → "PDP: x"). */
+function targetLabel(path: string): string {
+  if (path === '/') return 'Homepage';
+  if (path === '/products') return 'All PDPs';
+  if (path === '/collections') return 'All collections';
+  if (path === '/cart') return 'Cart';
+  let m: RegExpMatchArray | null;
+  if ((m = path.match(/^\/products\/(.+)$/))) return `PDP: ${m[1]}`;
+  if ((m = path.match(/^\/collections\/(.+)$/))) return `Collection: ${m[1]}`;
+  if ((m = path.match(/^\/pages\/(.+)$/))) return `LP: ${m[1]}`;
+  return path;
+}
+
+const TARGET_PRESETS = ['Sitewide', 'Homepage', 'All PDPs', 'All collections', 'Cart'];
+const TARGET_PREFIXES = ['PDP: ', 'Collection: ', 'LP: '];
+
+/** Suggestions for the targeting editor: values already used in ClickUp + pages live Intelligems tests target. */
+const TargetSuggestCtx = createContext<string[]>([]);
+
+/**
+ * Chip editor for "🧪 Test Targeting". Saves the ClickUp text field as a comma-separated list.
+ * Quick-add buttons for common areas; type a page (with suggestions) and press Enter.
+ */
+function TargetingEditor({ value, onSave, autoFocus }: { value: string; onSave: (v: string) => void; autoFocus?: boolean }) {
+  const suggestions = useContext(TargetSuggestCtx);
+  const [parts, setParts] = useState(() => splitTargeting(value));
+  const [draft, setDraft] = useState('');
+  const inputRef = useRef<HTMLInputElement>(null);
+  useEffect(() => { setParts(splitTargeting(value)); }, [value]);
+  const listId = useMemo(() => 'tt-' + Math.random().toString(36).slice(2), []);
+
+  const commit = (next: string[]) => {
+    setParts(next);
+    const v = next.join(', ');
+    if (v !== splitTargeting(value).join(', ')) onSave(v);
+  };
+  const add = (raw: string) => {
+    const t = raw.trim().replace(/,+$/, '').trim();
+    if (!t) return;
+    const has = parts.some(p => p.toLowerCase() === t.toLowerCase());
+    setDraft('');
+    if (!has) commit([...parts, t]);
+  };
+  const remove = (p: string) => commit(parts.filter(x => x !== p));
+  const prefill = (pre: string) => { setDraft(pre); inputRef.current?.focus(); };
+
+  return (
+    <div className="tt-editor">
+      <div className="tt-chips">
+        {parts.map(p => {
+          const paths = normTargets(p).filter(x => x.startsWith('/') || EVERYTHING.has(x));
+          return (
+            <span key={p} className="tt-tag" title={paths.length ? `Matches: ${paths.map(x => (EVERYTHING.has(x) ? 'every page' : x)).join(', ')}` : 'Matched as typed'}>
+              {p}<button type="button" onClick={() => remove(p)} aria-label={`Remove ${p}`}>×</button>
+            </span>
+          );
+        })}
+        <input
+          ref={inputRef}
+          className="tt-input"
+          list={listId}
+          autoFocus={autoFocus}
+          value={draft}
+          placeholder={parts.length ? 'Add another…' : 'Type a page, e.g. PDP: kids-calming-magnesium'}
+          onChange={e => (e.target.value.endsWith(',') ? add(e.target.value) : setDraft(e.target.value))}
+          onKeyDown={e => {
+            if (e.key === 'Enter') { e.preventDefault(); add(draft); }
+            else if (e.key === 'Backspace' && !draft && parts.length) remove(parts[parts.length - 1]);
+          }}
+          onBlur={() => draft.trim() && !TARGET_PREFIXES.includes(draft) && add(draft)}
+        />
+        <datalist id={listId}>
+          {suggestions.filter(s => !parts.includes(s)).map(s => <option key={s} value={s} />)}
+        </datalist>
+      </div>
+      <div className="tt-quick">
+        {TARGET_PRESETS.filter(p => !parts.some(x => x.toLowerCase() === p.toLowerCase())).map(p => (
+          <button key={p} type="button" className="tt-quick-btn" onClick={() => add(p)}>+ {p}</button>
+        ))}
+        {TARGET_PREFIXES.map(p => (
+          <button key={p} type="button" className="tt-quick-btn tt-quick-prefix" onClick={() => prefill(p)}>{p.trim()} …</button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 /** Split "🧪 Test Targeting" text into normalized targets (comma/semicolon/newline separated). */
 function targetsOf(i: Initiative): string[] {
   return Array.from(new Set((i.testTargeting || '').split(/[,;\n]+/).flatMap(normTargets)));
@@ -755,9 +844,12 @@ const SORT_KEY = 'roadmap.backlog.sort';
 const COLLAPSE_KEY = 'roadmap.backlog.collapsed';
 const CARD_ATTRS = ['ROCK', 'TACTIC', 'Task Category'];   // shown as chips on backlog cards
 
-function BacklogView({ items, meta, onOpen, onSchedule }: {
+function BacklogView({ items, meta, onOpen, onSchedule, onUpdate }: {
   items: Initiative[]; meta: RoadmapMeta; onOpen: (id: string) => void; onSchedule: (id: string, t: Target) => void;
+  onUpdate: (id: string, patch: InitiativeInput) => void;
 }) {
+  const [ttEditing, setTtEditing] = useState<string | null>(null);
+  const canTarget = (i: Initiative) => !!lists.find(l => l.id === i.listId)?.fields.testTargeting;
   const { listColor } = useColors();
   const lists = meta.lists;
   const nowYm = todayStr().slice(0, 7);
@@ -845,7 +937,7 @@ function BacklogView({ items, meta, onOpen, onSchedule }: {
                   <div
                     key={i.id}
                     className={`backlog-card ${i.done ? 'chip-done' : ''} ${sourceOf(i) === 'dates' ? 'backlog-locked' : ''}`}
-                    draggable={sourceOf(i) !== 'dates'}
+                    draggable={sourceOf(i) !== 'dates' && ttEditing !== i.id}
                     onDragStart={e => { e.dataTransfer.setData(DRAG_TYPE, i.id); e.dataTransfer.effectAllowed = 'move'; }}
                   >
                     <button className="backlog-card-name" onClick={() => onOpen(i.id)} title={i.name}>{i.name}</button>
@@ -857,10 +949,18 @@ function BacklogView({ items, meta, onOpen, onSchedule }: {
                     </div>
                     {(i.testTargeting || isTestItem(i)) && (
                       <div className="backlog-attrs">
-                        <span className={`attr-chip tt-chip ${i.testTargeting ? '' : 'tt-missing'}`} title={i.testTargeting ? `Test Targeting: ${i.testTargeting}` : 'A/B test with no Test Targeting — add it in ClickUp or the edit panel'}>
-                          <em>🧪</em>{i.testTargeting || 'no targeting set'}
-                        </span>
+                        <button type="button" className={`attr-chip tt-chip ${i.testTargeting ? '' : 'tt-missing'}`} disabled={!canTarget(i)}
+                          onClick={() => setTtEditing(ttEditing === i.id ? null : i.id)}
+                          title={canTarget(i) ? 'Click to set 🧪 Test Targeting' : `The “${i.listName}” list has no 🧪 Test Targeting field`}>
+                          <em>🧪</em>{i.testTargeting || 'set targeting'}{canTarget(i) && <span className="tt-edit-ico">✎</span>}
+                        </button>
                         <ConflictNote id={i.id} />
+                      </div>
+                    )}
+                    {ttEditing === i.id && (
+                      <div className="tt-inline" onDragStart={e => e.stopPropagation()} draggable={false}>
+                        <TargetingEditor value={i.testTargeting} onSave={v => onUpdate(i.id, { testTargeting: v })} autoFocus />
+                        <button type="button" className="btn btn-ghost btn-sm" onClick={() => setTtEditing(null)}>Done</button>
                       </div>
                     )}
                     {CARD_ATTRS.some(a => i.attrs?.[a]?.length) && (
@@ -1202,10 +1302,8 @@ function ItemFields({ value, list, meta, monthAround, onChange }: {
       {list.fields.testTargeting && (
         <div className="form-group">
           <label className="form-label">🧪 Test Targeting {isTestItem(value as Initiative) && !value.testTargeting && <span className="field-note">(needed to check for test conflicts)</span>}</label>
-          <input className="form-input" key={(value as Initiative).id || 'new'} defaultValue={value.testTargeting || ''}
-            placeholder="e.g. Homepage hero, PDP: kids-calming-magnesium, /collections/kids"
-            onBlur={e => e.target.value.trim() !== (value.testTargeting || '') && onChange({ testTargeting: e.target.value.trim() })} />
-          <p className="field-hint">Comma-separated pages/areas this test changes. Overlapping A/B tests on the same target (or URL paths inside each other, or “sitewide”) are flagged as conflicts.</p>
+          <TargetingEditor key={(value as Initiative).id || 'new'} value={value.testTargeting || ''} onSave={v => onChange({ testTargeting: v })} />
+          <p className="field-hint">Pages/areas this test changes — saved to ClickUp’s 🧪 Test Targeting. A/B tests on the same page (or pages inside each other, or “Sitewide”) at the same time are flagged as conflicts, including against live Intelligems tests.</p>
         </div>
       )}
 
@@ -1560,6 +1658,15 @@ export default function RoadmapPage() {
   // Conflicts are computed across all items (not just the filtered view) plus live tests
   const conflicts = useMemo(() => findConflicts(items, liveTests), [items, liveTests]);
 
+  // Targeting suggestions: values already used on ClickUp tasks + pages that live Intelligems tests target
+  const targetSuggestions = useMemo(() => {
+    const seen = new Map<string, string>();
+    const put = (s: string) => { const k = s.toLowerCase(); if (s && !seen.has(k)) seen.set(k, s); };
+    items.forEach(i => splitTargeting(i.testTargeting || '').forEach(put));
+    liveTests.forEach(t => (t.targets || []).filter(x => x.startsWith('/')).forEach(x => put(targetLabel(x))));
+    return Array.from(seen.values()).sort((a, b) => a.localeCompare(b));
+  }, [items, liveTests]);
+
   // --- Colors ---
   const colors = useMemo<Colors>(() => {
     const byPillar = !!meta?.pillars.length;
@@ -1628,6 +1735,7 @@ export default function RoadmapPage() {
   return (
     <ColorCtx.Provider value={colors}>
     <ConflictCtx.Provider value={conflicts}>
+    <TargetSuggestCtx.Provider value={targetSuggestions}>
     <ScheduleCtx.Provider value={scheduleTo}>
       <div className="app">
         {pending > 0 && <div className="saving-indicator">Saving to ClickUp…</div>}
@@ -1754,7 +1862,7 @@ export default function RoadmapPage() {
         {view === 'tests'
           ? <TestsView data={tests} />
           : view === 'backlog' && meta
-          ? <BacklogView items={filtered} meta={meta} onOpen={setSelectedId} onSchedule={scheduleTo} />
+          ? <BacklogView items={filtered} meta={meta} onOpen={setSelectedId} onSchedule={scheduleTo} onUpdate={updateItem} />
           : view === 'list'
           ? <ListView items={scoped} onOpen={setSelectedId} onToggleDone={toggleDone} />
           : month
@@ -1765,6 +1873,7 @@ export default function RoadmapPage() {
         {addDefaults && meta && <AddModal meta={meta} defaults={addDefaults} monthAround={monthAround} saving={pending > 0} onAdd={addItem} onClose={() => setAddDefaults(null)} />}
       </div>
     </ScheduleCtx.Provider>
+    </TargetSuggestCtx.Provider>
     </ConflictCtx.Provider>
     </ColorCtx.Provider>
   );
