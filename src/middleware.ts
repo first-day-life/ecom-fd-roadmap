@@ -34,8 +34,21 @@ function deny(req: NextRequest, status: number, message: string) {
   return new NextResponse(html, { status, headers: { 'content-type': 'text/html; charset=utf-8' } });
 }
 
+/** Read an env var at runtime. On Netlify, middleware runs as an Edge Function where
+ *  variables are also exposed via the global `Netlify.env`, so check both. */
+function env(name: string): string {
+  const fromProcess = typeof process !== 'undefined' ? process.env?.[name] : undefined;
+  if (fromProcess) return fromProcess.trim();
+  try {
+    const nf = (globalThis as any).Netlify;
+    const v = nf?.env?.get?.(name);
+    if (v) return String(v).trim();
+  } catch { /* not on Netlify */ }
+  return '';
+}
+
 export function middleware(req: NextRequest) {
-  const expected = process.env.ACCESS_TOKEN || '';
+  const expected = env('ACCESS_TOKEN');
 
   if (!expected) {
     // Fail closed in production; stay open for local development.
