@@ -5,7 +5,7 @@ import Link from 'next/link';
 
 interface ListInfo {
   id: string; name: string; statuses: number; tasks: number;
-  fields: { pillar: boolean; roadmapMonth: boolean; roadmapStart: boolean; roadmapEnd: boolean; sprint: boolean; bigSwing: boolean };
+  fields: { pillar: boolean; roadmapStart: boolean; roadmapEnd: boolean; sprint: boolean; bigSwing: boolean };
 }
 interface ConfigStatus {
   success: boolean; message: string; mock: boolean; hasToken: boolean; source: string;
@@ -16,7 +16,6 @@ interface ConfigStatus {
 const FIELD_LABELS: [keyof ListInfo['fields'], string][] = [
   ['roadmapStart', 'Roadmap Start Date'],
   ['roadmapEnd', 'Roadmap End Date'],
-  ['roadmapMonth', 'Target Month'],
   ['pillar', 'Pillar'],
   ['sprint', 'Sprint'],
   ['bigSwing', 'Big Swing'],
@@ -99,7 +98,7 @@ export default function ConfigPage() {
             </table>
           </div>
           <p className="field-hint" style={{ marginTop: 12 }}>
-            Fields are matched by name on each list. On the calendar, a task’s own start/due dates win; Roadmap Start/End Date are used only when the task has no dates; Target Month places undated tasks at the month level.
+            Fields are matched by name on each list. On the calendar, a task’s own start/due dates win; Roadmap Start/End Date are used only when the task has no dates. Tasks with neither are unplanned.
           </p>
         </div>
       )}
@@ -114,7 +113,7 @@ export default function ConfigPage() {
           <p><code>CLICKUP_TEAM_ID</code> — workspace ID, for links to lists (optional).</p>
           <p><code>APPROVER_PASSWORD</code> — required to review requests.</p>
           <p><code>ROADMAP_TIMEZONE</code> — defaults to America/New_York.</p>
-          <p>Field-name overrides (optional): <code>CLICKUP_FIELD_ROADMAP_START</code>, <code>CLICKUP_FIELD_ROADMAP_END</code>, <code>CLICKUP_FIELD_ROADMAP_MONTH</code>, <code>CLICKUP_FIELD_PILLAR</code>, <code>CLICKUP_FIELD_SPRINT</code>, <code>CLICKUP_FIELD_BIG_SWING</code>.</p>
+          <p>Field-name overrides (optional): <code>CLICKUP_FIELD_ROADMAP_START</code>, <code>CLICKUP_FIELD_ROADMAP_END</code>, <code>CLICKUP_FIELD_PILLAR</code>, <code>CLICKUP_FIELD_SPRINT</code>, <code>CLICKUP_FIELD_BIG_SWING</code>.</p>
           <p><code>CLICKUP_MOCK=1</code> — run with built-in sample data, no ClickUp needed (local development only).</p>
         </div>
       </div>

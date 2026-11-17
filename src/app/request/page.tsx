@@ -6,7 +6,7 @@ import { monthLabel, shiftMonth, todayStr } from '@/lib/dates';
 
 const PRIORITIES = ['Urgent', 'High', 'Normal', 'Low'];
 
-interface PublicMeta { pillars: { id: string; name: string }[]; monthOptions: string[] }
+interface PublicMeta { pillars: { id: string; name: string }[] }
 
 export default function RequestPage() {
   const blank = { name: '', pillar: '', month: '', priority: 'Normal', submittedBy: '', notes: '' };
@@ -17,11 +17,9 @@ export default function RequestPage() {
     fetch('/api/meta').then(r => r.json()).then(d => { if (!d.error) setMeta(d); }).catch(() => {});
   }, []);
 
-  // Month choices: the ClickUp dropdown's options from this month on, else the next 12 months
+  // Suggested month: the next 12 months (saved in the task description, not a ClickUp field)
   const nowYm = todayStr().slice(0, 7);
-  const months = meta?.monthOptions.length
-    ? meta.monthOptions.filter(m => m >= nowYm)
-    : Array.from({ length: 12 }, (_, i) => shiftMonth(nowYm, i));
+  const months = Array.from({ length: 12 }, (_, i) => shiftMonth(nowYm, i));
   const [submitting, setSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
   const [error, setError] = useState('');

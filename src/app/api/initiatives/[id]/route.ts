@@ -4,7 +4,7 @@ import type { InitiativeInput } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
 
-const ALLOWED: (keyof InitiativeInput)[] = ['name', 'status', 'priority', 'pillar', 'bigSwing', 'roadmapMonth', 'roadmapStart', 'roadmapEnd', 'sprint', 'testTargeting', 'ownerId', 'notes'];
+const ALLOWED: (keyof InitiativeInput)[] = ['name', 'status', 'priority', 'pillar', 'bigSwing', 'roadmapStart', 'roadmapEnd', 'sprint', 'testTargeting', 'ownerId', 'notes'];
 // ClickUp's native task dates are read-only for this app.
 const FORBIDDEN = ['startDate', 'dueDate', 'start_date', 'due_date'];
 

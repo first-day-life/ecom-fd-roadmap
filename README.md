@@ -14,8 +14,7 @@ A roadmap board that reads and writes **ClickUp** directly. It starts at the yea
 
 1. **Task start / due date** (ClickUp's native dates). These always win.
 2. **Roadmap Start Date / Roadmap End Date** custom fields. Used only when the task has no start or due date. Drawn hatched.
-3. **📅 Target Month** dropdown. Tasks with no dates show under *"Planned for <month> — no dates yet"*. Drag one onto a day to give it roadmap dates.
-4. Nothing set → **Unplanned** (shown under the year view).
+3. Nothing set → **Unplanned**. The app does not read or write ClickUp's 📅 Target Month field.
 
 Dragging writes back to whichever source placed the item: native dates stay native, and roadmap dates stay roadmap dates.
 

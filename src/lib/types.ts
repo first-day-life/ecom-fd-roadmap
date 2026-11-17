@@ -19,7 +19,6 @@ export interface Initiative {
   priority: string;          // Urgent | High | Normal | Low | ''
   pillar: string;            // Pillar dropdown option name ('' if unset / no field)
   bigSwing: boolean;
-  roadmapMonth: string;      // 'YYYY-MM' from the Target Month / Roadmap Month field, or ''
   roadmapStart: string;      // 'YYYY-MM-DD' from the "Roadmap Start Date" field, or ''
   roadmapEnd: string;        // 'YYYY-MM-DD' from the "Roadmap End Date" field, or ''
   sprint: string;            // Sprint field display value or ''
@@ -42,7 +41,6 @@ export interface InitiativeInput {
   priority?: string;
   pillar?: string;
   bigSwing?: boolean;
-  roadmapMonth?: string;
   roadmapStart?: string;
   roadmapEnd?: string;
   sprint?: string;
@@ -61,10 +59,9 @@ export interface ListMeta {
   url: string;
   color: string;                  // UI color for the list (used when there's no Pillar field)
   statuses: StatusOption[];
-  fields: { pillar: boolean; roadmapMonth: boolean; roadmapStart: boolean; roadmapEnd: boolean; sprint: boolean; bigSwing: boolean; testTargeting: boolean };
+  fields: { pillar: boolean; roadmapStart: boolean; roadmapEnd: boolean; sprint: boolean; bigSwing: boolean; testTargeting: boolean };
   pillars: FieldOption[];
   sprintOptions: FieldOption[];   // empty when Sprint is free text (or missing)
-  monthOptions: string[];         // 'YYYY-MM' values when the month field is a dropdown; empty = any month
 }
 
 export interface FilterField {

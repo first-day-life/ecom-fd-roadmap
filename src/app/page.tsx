@@ -21,7 +21,7 @@ type Span = { start: string; end: string; source: 'dates' | 'roadmap' | 'sprint'
  *   1. the task's own start/due dates
  *   2. the "Roadmap Start Date" / "Roadmap End Date" fields (only when the task has no start/due date)
  *   3. a date range parsed from the sprint name
- * Items with none of these fall back to their Target Month (month level only).
+ * Items with none of these are unplanned.
  */
 function spanOf(i: Initiative): Span | null {
   if (i.startDate || i.dueDate) {
@@ -35,29 +35,37 @@ function spanOf(i: Initiative): Span | null {
     return { start: s, end: e, source: 'roadmap' };
   }
   if (i.sprint) {
-    const year = Number(i.roadmapMonth.slice(0, 4)) || new Date().getFullYear();
-    const r = parseSprintRange(i.sprint, year);
+    const r = parseSprintRange(i.sprint, new Date().getFullYear());
     if (r) return { ...r, source: 'sprint' };
   }
   return null;
 }
 
-const SOURCE_LABEL: Record<Span['source'] | 'month' | 'none', string> = {
+const SOURCE_LABEL: Record<Span['source'] | 'none', string> = {
   dates: 'Task start/due dates',
   roadmap: 'Roadmap Start/End Date fields (task has no start/due date)',
   sprint: 'Dates parsed from the sprint name',
-  month: 'Target Month only — no dates yet',
-  none: 'Not on the calendar — no dates or month set',
+  none: 'Not on the calendar — no dates set',
 };
 
 function sourceOf(i: Initiative): keyof typeof SOURCE_LABEL {
-  return spanOf(i)?.source || (i.roadmapMonth ? 'month' : 'none');
+  return spanOf(i)?.source || 'none';
 }
 
 function inMonth(i: Initiative, ymStr: string): boolean {
   const sp = spanOf(i);
-  if (sp) return overlaps(sp.start, sp.end, monthStart(ymStr), monthEnd(ymStr));
-  return i.roadmapMonth === ymStr;
+  return !!sp && overlaps(sp.start, sp.end, monthStart(ymStr), monthEnd(ymStr));
+}
+
+/** Roadmap Start/End covering a month's whole weeks (first Monday → last Friday), never starting before this week. */
+function monthWeeks(ymStr: string): { roadmapStart: string; roadmapEnd: string } {
+  const ms = monthStart(ymStr), me = monthEnd(ymStr);
+  let start = mondayOf(ms) < ms ? addDays(mondayOf(ms), 7) : mondayOf(ms);
+  const thisWeek = mondayOf(todayStr());
+  if (start < thisWeek) start = thisWeek;
+  let end = fridayOf(me) > me ? addDays(fridayOf(me), -7) : fridayOf(me);
+  if (end < start) end = fridayOf(start);
+  return { roadmapStart: start, roadmapEnd: end };
 }
 
 function dateRangeLabel(i: Initiative): string {
@@ -230,8 +238,8 @@ function readUrl(): { from: string; span: number; month: string | null } {
 }
 
 function exportCSV(items: Initiative[]) {
-  const headers = ['Name', 'List', 'Pillar', 'Status', 'Priority', 'Owner', 'Start', 'Due', 'Roadmap Start', 'Roadmap End', 'Target Month', 'Sprint', 'Big Swing', 'ClickUp URL', 'Notes'];
-  const rows = items.map(i => [i.name, i.listName, i.pillar, i.status, i.priority, i.owners.map(o => o.name).join('; '), i.startDate, i.dueDate, i.roadmapStart, i.roadmapEnd, i.roadmapMonth ? monthLabel(i.roadmapMonth) : '', i.sprint, i.bigSwing ? 'Yes' : 'No', i.url, i.notes]
+  const headers = ['Name', 'List', 'Pillar', 'Status', 'Priority', 'Owner', 'Start', 'Due', 'Roadmap Start', 'Roadmap End', 'Sprint', 'Big Swing', 'ClickUp URL', 'Notes'];
+  const rows = items.map(i => [i.name, i.listName, i.pillar, i.status, i.priority, i.owners.map(o => o.name).join('; '), i.startDate, i.dueDate, i.roadmapStart, i.roadmapEnd, i.sprint, i.bigSwing ? 'Yes' : 'No', i.url, i.notes]
     .map(v => `"${String(v || '').replace(/"/g, '""')}"`));
   const csv = [headers, ...rows].map(r => r.join(',')).join('\n');
   const a = document.createElement('a');
@@ -245,14 +253,6 @@ async function api<T>(url: string, opts?: RequestInit): Promise<T> {
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || res.statusText || 'Request failed');
   return data as T;
-}
-
-/** Month choices: the dropdown's own options when it has them, else a rolling range. */
-function monthChoices(list: ListMeta | undefined, _around: string): string[] {
-  // Never offer past months: start at the current month
-  const nowYm = todayStr().slice(0, 7);
-  if (list?.monthOptions.length) return list.monthOptions.filter(m => m >= nowYm);
-  return Array.from({ length: 13 }, (_, d) => shiftMonth(nowYm, d));
 }
 
 /** Mondays from the current week forward ~15 months. A past `current` value stays selectable so it still displays. */
@@ -387,7 +387,7 @@ function OverviewView({ months, items, onOpenMonth, onOpenItem }: {
         <div className="unplanned">
           <button className="unplanned-head" onClick={() => setShowUnplanned(s => !s)}>
             {showUnplanned ? '▾' : '▸'} Unplanned <span className="count-badge">{unplanned.length}</span>
-            <span className="unplanned-hint">No dates or Target Month — open a month and drag these onto a week, or use the Backlog tab</span>
+            <span className="unplanned-hint">No dates — open a month and drag these onto a week, or use the Backlog tab</span>
           </button>
           {showUnplanned && <div className="chip-wrap">{unplanned.map(i => <ItemChip key={i.id} item={i} onOpen={onOpenItem} />)}</div>}
         </div>
@@ -422,7 +422,7 @@ function MonthView({ monthKey, items, lists, liveTests, onUpdate, onOpen, onAdd 
   const [drag, setDrag] = useState<DragState | null>(null);
   const dragRef = useRef<DragState | null>(null);
 
-  const [tray, setTray] = useState<'month' | 'unplanned' | 'all'>('month');
+  const [tray, setTray] = useState<'unplanned' | 'all'>('unplanned');
   const [trayQuery, setTrayQuery] = useState('');
   const [trayList, setTrayList] = useState('');
   const [trayOpenOnly, setTrayOpenOnly] = useState(true);
@@ -431,9 +431,8 @@ function MonthView({ monthKey, items, lists, liveTests, onUpdate, onOpen, onAdd 
   const monthItems = items.filter(i => inMonth(i, monthKey));
   const dated = monthItems.filter(i => { const sp = spanOf(i); return sp && overlaps(sp.start, sp.end, gridStart, gridEnd); });
   const liveInMonth = liveSlots(liveTests).filter(s => overlaps(s.start, s.end, gridStart, gridEnd));
-  const monthOnly = monthItems.filter(i => !spanOf(i));
   const unplanned = items.filter(i => sourceOf(i) === 'none' && !i.done);
-  const traySource = tray === 'month' ? monthOnly : tray === 'unplanned' ? unplanned : items.filter(i => !trayOpenOnly || !i.done);
+  const traySource = tray === 'unplanned' ? unplanned : items.filter(i => !trayOpenOnly || !i.done);
   const trayItems = traySource
     .filter(i => !trayList || i.listId === trayList)
     .filter(i => !trayQuery || i.name.toLowerCase().includes(trayQuery.toLowerCase()))
@@ -632,7 +631,6 @@ function MonthView({ monthKey, items, lists, liveTests, onUpdate, onOpen, onAdd 
           <div className="side-stats">
             <div><strong>{monthItems.length}</strong><span>items</span></div>
             <div><strong>{dated.length}</strong><span>scheduled</span></div>
-            <div><strong>{monthOnly.length}</strong><span>no dates</span></div>
             <div><strong>{monthItems.length ? Math.round((done / monthItems.length) * 100) : 0}%</strong><span>done</span></div>
           </div>
           <div className="side-groups">
@@ -644,8 +642,7 @@ function MonthView({ monthKey, items, lists, liveTests, onUpdate, onOpen, onAdd 
 
         <div className="side-card side-tray">
           <div className="view-toggle tray-tabs">
-            <button className={tray === 'month' ? 'active' : ''} onClick={() => setTray('month')} title={`Target Month is ${monthLabel(monthKey)}, but no dates`}>No dates <span className="count-badge">{monthOnly.length}</span></button>
-            <button className={tray === 'unplanned' ? 'active' : ''} onClick={() => setTray('unplanned')} title="Open tasks with no dates and no Target Month">Unplanned <span className="count-badge">{unplanned.length}</span></button>
+            <button className={tray === 'unplanned' ? 'active' : ''} onClick={() => setTray('unplanned')} title="Open tasks with no dates">Unplanned <span className="count-badge">{unplanned.length}</span></button>
             <button className={tray === 'all' ? 'active' : ''} onClick={() => setTray('all')} title="Every task in every list">All</button>
           </div>
           <div className="tray-filters">
@@ -660,9 +657,9 @@ function MonthView({ monthKey, items, lists, liveTests, onUpdate, onOpen, onAdd 
           <div className="tray-list">
             {trayItems.length
               ? trayItems.map(i => <ItemChip key={i.id} item={i} onOpen={onOpen} draggable={sourceOf(i) !== 'dates'} />)
-              : <div className="month-card-empty">{trayQuery ? 'No matches' : tray === 'month' ? 'Everything this month has dates.' : 'Nothing here.'}</div>}
+              : <div className="month-card-empty">{trayQuery ? 'No matches' : 'Nothing here.'}</div>}
           </div>
-          {tray === 'month' && <button className="btn btn-ghost btn-sm" style={{ marginTop: 8 }} onClick={() => onAdd({ roadmapMonth: monthKey })}>+ Add to {monthLabel(monthKey).split(' ')[0]}</button>}
+          <button className="btn btn-ghost btn-sm" style={{ marginTop: 8 }} onClick={() => onAdd(monthWeeks(monthKey))}>+ Add to {monthLabel(monthKey).split(' ')[0]}</button>
         </div>
       </aside>
     </div>
@@ -676,7 +673,6 @@ function MonthView({ monthKey, items, lists, liveTests, onUpdate, onOpen, onAdd 
 function placementLabel(i: Initiative): string {
   const src = sourceOf(i);
   if (src === 'none') return 'Unplanned';
-  if (src === 'month') return `${monthLabel(i.roadmapMonth, true)} · no dates`;
   return dateRangeLabel(i) + (src === 'roadmap' ? ' · roadmap' : src === 'sprint' ? ' · sprint' : ' · ClickUp dates');
 }
 
@@ -720,7 +716,7 @@ function makeSorter(sort: SortKey, lists: ListMeta[]) {
     const idx = l ? l.statuses.findIndex(s => s.name === i.status) : -1;
     return idx < 0 ? 0 : idx;
   };
-  const when = (i: Initiative) => spanOf(i)?.start || (i.roadmapMonth ? i.roadmapMonth + '-15' : '9999-99');
+  const when = (i: Initiative) => spanOf(i)?.start || '9999-99';
   const pri = (i: Initiative) => PRIORITY_RANK[i.priority] ?? 4;
   const ready = (i: Initiative) => READY_RANK[(i.attrs?.['Ready to Start?']?.[0] || '').toLowerCase()] ?? 2;
   const impact = (i: Initiative) => SIZE_RANK[i.attrs?.['Impact']?.[0] || ''] ?? 5;
@@ -806,7 +802,7 @@ function BacklogView({ items, meta, onOpen, onSchedule }: {
         })}
       </div>
       <p className="month-only-hint" style={{ margin: '0 0 12px' }}>
-        Drag a card onto a month to plan it there (sets Target Month where the list has it, otherwise Roadmap Start/End across that month’s weeks),
+        Drag a card onto a month to plan it there (sets Roadmap Start/End across that month’s weeks, or moves an already-planned item to the month’s first week),
         or use “Plan for…”. Then open the month and drag it onto a specific week. 🔒 items have their own ClickUp dates and can’t be moved here.
       </p>
 
@@ -1077,14 +1073,14 @@ function TestsView({ data }: { data: { configured: boolean; tests: LiveTest[]; e
 function ListView({ items, onOpen, onToggleDone }: { items: Initiative[]; onOpen: (id: string) => void; onToggleDone: (i: Initiative) => void }) {
   const { listColor, pillarColor } = useColors();
   if (!items.length) return <div className="empty-state">No initiatives match your filters.</div>;
-  const key = (i: Initiative) => spanOf(i)?.start || (i.roadmapMonth ? i.roadmapMonth + '-99' : '9999');
+  const key = (i: Initiative) => spanOf(i)?.start || '9999';
   const sorted = [...items].sort((a, b) => Number(a.done) - Number(b.done) || key(a).localeCompare(key(b)));
   const anyPillar = items.some(i => i.pillar);
   return (
     <div className="scroll-x">
       <table className="list-table">
         <thead>
-          <tr><th></th><th>Initiative</th><th>List</th>{anyPillar && <th>Pillar</th>}<th>Status</th><th>Priority</th><th>Owner</th><th>Calendar dates</th><th>Month</th><th></th></tr>
+          <tr><th></th><th>Initiative</th><th>List</th>{anyPillar && <th>Pillar</th>}<th>Status</th><th>Priority</th><th>Owner</th><th>Calendar dates</th><th></th></tr>
         </thead>
         <tbody>
           {sorted.map(i => {
@@ -1103,7 +1099,6 @@ function ListView({ items, onOpen, onToggleDone }: { items: Initiative[]; onOpen
                   {src === 'roadmap' && <span className="src-tag">roadmap</span>}
                   {src === 'sprint' && <span className="src-tag">sprint</span>}
                 </td>
-                <td style={{ whiteSpace: 'nowrap' }}>{i.roadmapMonth ? monthLabel(i.roadmapMonth, true) : '—'}</td>
                 <td>{i.url && <a href={i.url} target="_blank" rel="noreferrer" className="link-btn">ClickUp ↗</a>}</td>
               </tr>
             );
@@ -1203,18 +1198,6 @@ function ItemFields({ value, list, meta, monthAround, onChange }: {
         </div>
       ) : <p className="field-hint">The “{list.name}” list is missing the Roadmap Start/End Date fields in ClickUp.</p>}
       {value.roadmapStart && <p className="field-hint">Roadmap: {shortDate(value.roadmapStart)} → {value.roadmapEnd ? shortDate(value.roadmapEnd) : '—'}{hasNative ? ' (not shown — task dates take priority)' : ''}</p>}
-      <div className="form-row">
-        {list.fields.roadmapMonth && (
-          <div className="form-group">
-            <label className="form-label">Target Month</label>
-            <select className="form-select" value={value.roadmapMonth || ''} onChange={e => onChange({ roadmapMonth: e.target.value })}>
-              <option value="">—</option>
-              {value.roadmapMonth && !monthChoices(list, monthAround).includes(value.roadmapMonth) && <option value={value.roadmapMonth}>{monthLabel(value.roadmapMonth)}{value.roadmapMonth < todayStr().slice(0, 7) ? ' (past)' : ''}</option>}
-              {monthChoices(list, monthAround).map(m => <option key={m} value={m}>{monthLabel(m)}</option>)}
-            </select>
-          </div>
-        )}
-      </div>
 
       {list.fields.testTargeting && (
         <div className="form-group">
@@ -1340,7 +1323,6 @@ function AddModal({ meta, defaults, monthAround, saving, onAdd, onClose }: {
     const out: InitiativeInput & { name: string } = { ...form, name: form.name.trim() };
     if (!list.fields.roadmapStart) delete out.roadmapStart;
     if (!list.fields.roadmapEnd) delete out.roadmapEnd;
-    if (!list.fields.roadmapMonth || (list.monthOptions.length && out.roadmapMonth && !list.monthOptions.includes(out.roadmapMonth))) delete out.roadmapMonth;
     if (!list.fields.pillar) delete out.pillar;
     if (!list.fields.sprint) delete out.sprint;
     onAdd(out);
@@ -1531,7 +1513,7 @@ export default function RoadmapPage() {
 
   /**
    * Drop / plan an item onto a month or a week. Writes ONLY Roadmap Start/End Date
-   * (Monday → Friday) and Target Month — never the ClickUp task's own start/due dates.
+   * (Monday → Friday) — never the ClickUp task's own start/due dates.
    * Items that have their own start/due dates are locked (those dates take priority).
    */
   const scheduleTo = useCallback((id: string, t: Target) => {
@@ -1557,19 +1539,10 @@ export default function RoadmapPage() {
       const start = mondayOf(t.date);
       patch = { roadmapStart: start, roadmapEnd: addDays(fridayOf(start), 7 * weeksLen) };
     } else {
-      const monthOk = !!list.fields.roadmapMonth && (!list.monthOptions.length || list.monthOptions.includes(t.ym));
-      if (sp) {
-        // Already scheduled: move to the first week of that month, same length
-        const start = mondayOf(monthStart(t.ym)) < monthStart(t.ym) ? addDays(mondayOf(monthStart(t.ym)), 7) : mondayOf(monthStart(t.ym));
-        patch = { roadmapStart: start, roadmapEnd: addDays(fridayOf(start), 7 * weeksLen) };
-        if (monthOk) patch.roadmapMonth = t.ym;
-      } else if (monthOk) {
-        patch = { roadmapMonth: t.ym };
-      } else {
-        // No Target Month on this list → plan it across the month's weeks
-        const first = mondayOf(monthStart(t.ym)) < monthStart(t.ym) ? addDays(mondayOf(monthStart(t.ym)), 7) : mondayOf(monthStart(t.ym));
-        patch = { roadmapStart: first, roadmapEnd: fridayOf(monthEnd(t.ym)) > monthEnd(t.ym) ? addDays(fridayOf(monthEnd(t.ym)), -7) : fridayOf(monthEnd(t.ym)) };
-      }
+      const whole = monthWeeks(t.ym);
+      // Already scheduled: move to the first week of that month, same length.
+      // Not scheduled yet: plan it across the month's weeks.
+      patch = sp ? { roadmapStart: whole.roadmapStart, roadmapEnd: addDays(fridayOf(whole.roadmapStart), 7 * weeksLen) } : whole;
     }
     updateItem(id, patch);
   }, [items, listOf, updateItem]);
@@ -1673,7 +1646,7 @@ export default function RoadmapPage() {
             <Link href="/accomplishments" className="btn btn-ghost btn-sm">Accomplishments</Link>
             <Link href="/config" className="btn btn-ghost btn-sm" title="Configuration">⚙</Link>
             <button className="btn btn-ghost btn-sm" onClick={() => exportCSV(scoped)}>↓ CSV</button>
-            {meta && <button className="btn btn-primary btn-sm" onClick={() => setAddDefaults(month ? { roadmapMonth: month } : {})}>+ Add</button>}
+            {meta && <button className="btn btn-primary btn-sm" onClick={() => setAddDefaults(month ? monthWeeks(month) : {})}>+ Add</button>}
             <AuthStatus />
           </div>
         </div>

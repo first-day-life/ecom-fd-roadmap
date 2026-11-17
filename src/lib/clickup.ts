@@ -9,7 +9,6 @@
 // names configurable via env, comma-separated alternatives allowed):
 //   Roadmap Start Date / Roadmap End Date — date fields. Used for placement ONLY
 //                    when the task has no native start/due date.
-//   Target Month   — month dropdown ("Nov 26") / text / date (alt: "Roadmap Month")
 //   Pillar         — dropdown (optional)
 //   Sprint         — dropdown or text (optional)
 //   Big Swing      — checkbox (optional)
@@ -19,7 +18,7 @@
 // Approving removes the tag; rejecting archives the task.
 
 import type { Initiative, InitiativeInput, Member, RoadmapMeta, RoadmapRequest, FieldOption, StatusOption, ListMeta, FilterField } from './types';
-import { parseMonthLabel, monthLabel } from './dates';
+import { monthLabel } from './dates';
 import { mockFetch } from './clickupMock';
 
 const API = 'https://api.clickup.com/api/v2';
@@ -41,7 +40,6 @@ const env = {
   filterFields: () => csv(process.env.CLICKUP_FILTER_FIELDS || 'ROCK,TACTIC,Task Category,Type of Request,Ready to Start?,Project Owner,Experiment Type,Size,Impact'),
   fieldNames: {
     pillar: () => csv(process.env.CLICKUP_FIELD_PILLAR || 'Pillar'),
-    roadmapMonth: () => csv(process.env.CLICKUP_FIELD_ROADMAP_MONTH || 'Target Month,Roadmap Month'),
     roadmapStart: () => csv(process.env.CLICKUP_FIELD_ROADMAP_START || 'Roadmap Start Date,Roadmap Start'),
     roadmapEnd: () => csv(process.env.CLICKUP_FIELD_ROADMAP_END || 'Roadmap End Date,Roadmap End'),
     sprint: () => csv(process.env.CLICKUP_FIELD_SPRINT || 'Sprint'),
@@ -86,7 +84,7 @@ async function cu<T = any>(path: string, init: { method?: string; body?: unknown
 // ---------------------------------------------------------------------------
 
 interface RawField { id: string; name: string; type: string; type_config?: { options?: Array<{ id: string; name?: string; label?: string; color?: string; orderindex?: number }> } }
-type FieldKey = 'pillar' | 'roadmapMonth' | 'roadmapStart' | 'roadmapEnd' | 'sprint' | 'bigSwing' | 'testTargeting';
+type FieldKey = 'pillar' | 'roadmapStart' | 'roadmapEnd' | 'sprint' | 'bigSwing' | 'testTargeting';
 
 interface ListCtx {
   meta: ListMeta;
@@ -148,7 +146,6 @@ async function loadList(id: string, idx: number): Promise<{ ctx: ListCtx; member
   const raw = fieldRes.fields || [];
   const fields: ListCtx['fields'] = {
     pillar: findField(raw, env.fieldNames.pillar()),
-    roadmapMonth: findField(raw, env.fieldNames.roadmapMonth()),
     roadmapStart: findField(raw, env.fieldNames.roadmapStart()),
     roadmapEnd: findField(raw, env.fieldNames.roadmapEnd()),
     sprint: findField(raw, env.fieldNames.sprint()),
@@ -161,10 +158,6 @@ async function loadList(id: string, idx: number): Promise<{ ctx: ListCtx; member
   const statuses: StatusOption[] = (list.statuses || []).map((s: any) => ({
     name: s.status, color: s.color || '#9ca3af', type: s.type, done: isDoneStatus(s.type, s.status),
   }));
-  const rm = fields.roadmapMonth;
-  const monthOptions = rm && ['drop_down', 'labels'].includes(rm.type)
-    ? fieldOptions(rm).map(o => parseMonthLabel(o.name, new Date().getFullYear())).filter(Boolean)
-    : [];
   const team = env.teamId();
   const meta: ListMeta = {
     id,
@@ -173,12 +166,11 @@ async function loadList(id: string, idx: number): Promise<{ ctx: ListCtx; member
     color: LIST_COLORS[idx % LIST_COLORS.length],
     statuses,
     fields: {
-      pillar: !!fields.pillar, roadmapMonth: !!fields.roadmapMonth, roadmapStart: !!fields.roadmapStart, roadmapEnd: !!fields.roadmapEnd,
+      pillar: !!fields.pillar, roadmapStart: !!fields.roadmapStart, roadmapEnd: !!fields.roadmapEnd,
       sprint: !!fields.sprint, bigSwing: !!fields.bigSwing, testTargeting: !!fields.testTargeting,
     },
     pillars: fieldOptions(fields.pillar),
     sprintOptions: fields.sprint && ['drop_down', 'labels'].includes(fields.sprint.type) ? fieldOptions(fields.sprint) : [],
-    monthOptions,
   };
   return { ctx: { meta, fields, attrFields }, members: (memberRes.members || []).map(toMember) };
 }
@@ -283,33 +275,23 @@ function fieldText(field: RawField | undefined, task: any): string {
   }
 }
 
-function readRoadmapMonth(field: RawField | undefined, task: any, hint: string): string {
-  const text = fieldText(field, task);
-  if (!field || !text) return '';
-  if (field.type === 'date') return text.slice(0, 7);
-  const fallbackYear = Number(hint.slice(0, 4)) || new Date().getFullYear();
-  return parseMonthLabel(text, fallbackYear);
-}
-
 /** Value to POST for a custom field from a display value. undefined = clear. */
-function fieldValueFor(field: RawField, display: string, kind: 'month' | 'date' | 'plain'): unknown {
+function fieldValueFor(field: RawField, display: string, kind: 'date' | 'plain'): unknown {
   if (!display) return undefined;
   switch (field.type) {
     case 'drop_down':
     case 'labels': {
       const opts = fieldOptions(field);
-      const match = kind === 'month'
-        ? opts.find(o => parseMonthLabel(o.name, Number(display.slice(0, 4))) === display)
-        : opts.find(o => o.name === display || o.id === display);
-      if (!match) throw new Error(`"${kind === 'month' ? monthLabel(display) : display}" isn't an option on the ClickUp field "${field.name}"`);
+      const match = opts.find(o => o.name === display || o.id === display);
+      if (!match) throw new Error(`"${display}" isn't an option on the ClickUp field "${field.name}"`);
       return field.type === 'labels' ? [match.id] : match.id;
     }
     case 'date':
-      return dateToMs(kind === 'month' ? `${display}-01` : display);
+      return dateToMs(display);
     case 'number':
       return Number(display);
     default:
-      return kind === 'month' ? monthLabel(display) : display;
+      return display;
   }
 }
 
@@ -342,7 +324,6 @@ function mapTask(task: any, l: ListCtx): Initiative {
     priority: PRIORITY_FROM_CU[task.priority?.priority] || '',
     pillar: fieldText(l.fields.pillar, task),
     bigSwing: rawValue(l.fields.bigSwing, task) === true || rawValue(l.fields.bigSwing, task) === 'true',
-    roadmapMonth: readRoadmapMonth(l.fields.roadmapMonth, task, start || due || roadmapStart || roadmapEnd),
     roadmapStart,
     roadmapEnd,
     sprint: fieldText(l.fields.sprint, task),
@@ -423,13 +404,12 @@ export async function addInitiative(input: InitiativeInput & { name: string }, e
   const l = listCtx(ctx, input.listId || ctx.meta.defaultListId);
   const f = l.fields;
   const custom_fields: Array<{ id: string; value: unknown; value_options?: unknown }> = [];
-  const push = (field: RawField | undefined, display: string | undefined, kind: 'month' | 'date' | 'plain') => {
+  const push = (field: RawField | undefined, display: string | undefined, kind: 'date' | 'plain') => {
     if (!field || !display) return;
     const value = fieldValueFor(field, display, kind);
     if (value !== undefined) custom_fields.push(field.type === 'date' ? { id: field.id, value, value_options: { time: false } } : { id: field.id, value });
   };
   push(f.pillar, input.pillar, 'plain');
-  push(f.roadmapMonth, input.roadmapMonth, 'month');
   push(f.roadmapStart, input.roadmapStart, 'date');
   push(f.roadmapEnd, input.roadmapEnd, 'date');
   push(f.sprint, input.sprint, 'plain');
@@ -471,7 +451,6 @@ export async function updateInitiative(id: string, input: InitiativeInput): Prom
   if (Object.keys(body).length) await cu(`/task/${id}`, { method: 'PUT', body });
 
   if (input.pillar !== undefined && f.pillar) await setField(id, f.pillar, fieldValueFor(f.pillar, input.pillar, 'plain'));
-  if (input.roadmapMonth !== undefined && f.roadmapMonth) await setField(id, f.roadmapMonth, fieldValueFor(f.roadmapMonth, input.roadmapMonth, 'month'));
   if (input.roadmapStart !== undefined && f.roadmapStart) await setField(id, f.roadmapStart, fieldValueFor(f.roadmapStart, input.roadmapStart, 'date'));
   if (input.roadmapEnd !== undefined && f.roadmapEnd) await setField(id, f.roadmapEnd, fieldValueFor(f.roadmapEnd, input.roadmapEnd, 'date'));
   if (input.sprint !== undefined && f.sprint) await setField(id, f.sprint, fieldValueFor(f.sprint, input.sprint, 'plain'));
@@ -493,22 +472,26 @@ export async function archiveInitiative(id: string): Promise<void> {
 // ---------------------------------------------------------------------------
 
 const REQ_PREFIX = '**Requested by:** ';
+const MONTH_PREFIX = '**Suggested month:** ';
 
 export async function getRequests(): Promise<RoadmapRequest[]> {
   const tag = env.requestTag();
   return (await getAllItems())
     .filter(i => i.tags.includes(tag))
     .map(i => {
+      // Header lines written by addRequest: "Requested by" and (optionally) "Suggested month"
       const lines = i.notes.split('\n');
-      const by = lines[0]?.startsWith(REQ_PREFIX) ? lines[0].slice(REQ_PREFIX.length).trim() : '';
+      let by = '', month = '', n = 0;
+      if (lines[n]?.startsWith(REQ_PREFIX)) by = lines[n++].slice(REQ_PREFIX.length).trim();
+      if (lines[n]?.startsWith(MONTH_PREFIX)) month = lines[n++].slice(MONTH_PREFIX.length).trim();
       return {
         id: i.id,
         name: i.name,
         pillar: i.pillar,
-        month: i.roadmapMonth ? monthLabel(i.roadmapMonth) : '',
+        month,
         priority: i.priority,
         submittedBy: by,
-        notes: by ? lines.slice(1).join('\n').trim() : i.notes,
+        notes: n ? lines.slice(n).join('\n').trim() : i.notes,
         submittedAt: i.createdAt,
         url: i.url,
       };
@@ -519,15 +502,14 @@ export async function getRequests(): Promise<RoadmapRequest[]> {
 export async function addRequest(r: { name: string; pillar?: string; month?: string; priority?: string; submittedBy: string; notes?: string }) {
   const ctx = await getCtx();
   const l = listCtx(ctx, ctx.meta.requestListId);
-  let month = l.fields.roadmapMonth ? r.month : undefined;
-  if (month && l.meta.monthOptions.length && !l.meta.monthOptions.includes(month)) month = undefined;
+  // The suggested month is kept in the description only — no ClickUp month field is written
+  const month = r.month && /^\d{4}-\d{2}$/.test(r.month) ? `\n${MONTH_PREFIX}${monthLabel(r.month)}` : '';
   return addInitiative({
     listId: l.meta.id,
     name: r.name,
     pillar: l.fields.pillar ? r.pillar : undefined,
-    roadmapMonth: month,
     priority: r.priority,
-    notes: `${REQ_PREFIX}${r.submittedBy}\n\n${r.notes || ''}`.trim(),
+    notes: `${REQ_PREFIX}${r.submittedBy}${month}\n\n${r.notes || ''}`.trim(),
   }, [env.requestTag()]);
 }
 
