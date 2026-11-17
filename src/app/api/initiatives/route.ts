@@ -19,7 +19,11 @@ export async function POST(req: NextRequest) {
     if (!body.name?.trim()) {
       return NextResponse.json({ error: 'Name is required' }, { status: 400 });
     }
-    const item = await addInitiative({ ...body, name: body.name.trim() });
+    if (['startDate', 'dueDate', 'start_date', 'due_date'].some(k => k in body)) {
+      return NextResponse.json({ error: 'The roadmap never sets ClickUp start/due dates. Set Roadmap Start/End Date instead.' }, { status: 400 });
+    }
+    const { name, listId, status, priority, pillar, bigSwing, roadmapMonth, roadmapStart, roadmapEnd, sprint, ownerId, notes } = body;
+    const item = await addInitiative({ name: name.trim(), listId, status, priority, pillar, bigSwing, roadmapMonth, roadmapStart, roadmapEnd, sprint, ownerId, notes });
     return NextResponse.json(item, { status: 201 });
   } catch (err: any) {
     return NextResponse.json({ error: err.message }, { status: 500 });

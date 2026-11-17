@@ -4,11 +4,17 @@ import type { InitiativeInput } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
 
-const ALLOWED: (keyof InitiativeInput)[] = ['name', 'status', 'priority', 'pillar', 'bigSwing', 'roadmapMonth', 'roadmapStart', 'roadmapEnd', 'sprint', 'startDate', 'dueDate', 'ownerId', 'notes'];
+const ALLOWED: (keyof InitiativeInput)[] = ['name', 'status', 'priority', 'pillar', 'bigSwing', 'roadmapMonth', 'roadmapStart', 'roadmapEnd', 'sprint', 'ownerId', 'notes'];
+// ClickUp's native task dates are read-only for this app.
+const FORBIDDEN = ['startDate', 'dueDate', 'start_date', 'due_date'];
 
 export async function PUT(req: NextRequest, { params }: { params: { id: string } }) {
   try {
     const body = await req.json();
+    const forbidden = FORBIDDEN.filter(k => k in body);
+    if (forbidden.length) {
+      return NextResponse.json({ error: 'The roadmap never changes ClickUp start/due dates. Set Roadmap Start/End Date instead.' }, { status: 400 });
+    }
     const input: InitiativeInput = {};
     for (const k of ALLOWED) if (k in body) (input as any)[k] = body[k];
     const updated = await updateInitiative(params.id, input);

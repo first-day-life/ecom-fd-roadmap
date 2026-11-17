@@ -43,8 +43,7 @@ export interface InitiativeInput {
   roadmapStart?: string;
   roadmapEnd?: string;
   sprint?: string;
-  startDate?: string;
-  dueDate?: string;
+  // NOTE: no startDate/dueDate — the app never writes ClickUp's native task dates.
   ownerId?: number | null;   // replaces all assignees with this one (null = none)
   notes?: string;
 }

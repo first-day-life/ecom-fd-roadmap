@@ -129,3 +129,13 @@ export function parseSprintRange(name: string, year: number): { start: string; e
   }
   return null;
 }
+
+/** Monday of the week containing d. */
+export function mondayOf(d: string): string {
+  return addDays(d, -weekday(d));
+}
+
+/** Friday of the week containing d — the app's "end of a planned week". */
+export function fridayOf(d: string): string {
+  return addDays(mondayOf(d), 4);
+}

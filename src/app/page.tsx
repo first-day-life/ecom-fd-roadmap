@@ -5,8 +5,8 @@ import Link from 'next/link';
 import type { Initiative, InitiativeInput, RoadmapMeta, ListMeta } from '@/lib/types';
 import { PRIORITIES } from '@/lib/types';
 import {
-  MONTH_NAMES, DAY_SHORT, addDays, diffDays, monthStart, monthEnd, monthLabel, shiftMonth, shortDate,
-  weeksOfMonth, overlaps, todayStr, ym, parseSprintRange, toUTC,
+  addDays, diffDays, monthStart, monthEnd, monthLabel, shiftMonth, shortDate,
+  weeksOfMonth, overlaps, todayStr, parseSprintRange, mondayOf, fridayOf,
 } from '@/lib/dates';
 
 // ---------------------------------------------------------------------------
@@ -77,15 +77,50 @@ const ColorCtx = createContext<Colors>({ colorOf: () => '#cbd5e1', groupOf: () =
 const useColors = () => useContext(ColorCtx);
 
 // ---------------------------------------------------------------------------
+// Drag-to-schedule: drop any item chip onto a month, a week or a day
+// ---------------------------------------------------------------------------
+
+type Target = { kind: 'day'; date: string } | { kind: 'week'; start: string; end: string } | { kind: 'month'; ym: string };
+const ScheduleCtx = createContext<(id: string, t: Target) => void>(() => {});
+const DRAG_TYPE = 'text/roadmap-id';
+
+function DropZone({ target, className = '', overClass = 'drop-over', style, children }: {
+  target: Target; className?: string; overClass?: string; style?: React.CSSProperties; children?: React.ReactNode;
+}) {
+  const schedule = useContext(ScheduleCtx);
+  const [over, setOver] = useState(false);
+  return (
+    <div
+      className={`${className} ${over ? overClass : ''}`}
+      style={style}
+      onDragOver={e => { if (e.dataTransfer.types.includes(DRAG_TYPE)) { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; if (!over) setOver(true); } }}
+      onDragLeave={e => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setOver(false); }}
+      onDrop={e => {
+        e.preventDefault();
+        setOver(false);
+        const id = e.dataTransfer.getData(DRAG_TYPE);
+        if (id) schedule(id, target);
+      }}
+    >
+      {children}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Misc helpers
 // ---------------------------------------------------------------------------
 
-function readUrl(): { year: number; month: string | null } {
-  if (typeof window === 'undefined') return { year: new Date().getFullYear(), month: null };
+const SPANS = [3, 6, 12] as const;
+
+/** URL state: ?month=YYYY-MM opens a month; otherwise ?from=YYYY-MM&span=3|6|12 sets the overview window. */
+function readUrl(): { from: string; span: number; month: string | null } {
+  const nowYm = todayStr().slice(0, 7);
+  if (typeof window === 'undefined') return { from: nowYm, span: 3, month: null };
   const q = new URLSearchParams(window.location.search);
-  const month = q.get('month');
-  if (month && /^\d{4}-\d{2}$/.test(month)) return { year: Number(month.slice(0, 4)), month };
-  return { year: Number(q.get('year')) || new Date().getFullYear(), month: null };
+  const valid = (v: string | null) => (v && /^\d{4}-\d{2}$/.test(v) ? v : null);
+  const span = SPANS.includes(Number(q.get('span')) as any) ? Number(q.get('span')) : 3;
+  return { from: valid(q.get('from')) || nowYm, span, month: valid(q.get('month')) };
 }
 
 function exportCSV(items: Initiative[]) {
@@ -114,6 +149,15 @@ function monthChoices(list: ListMeta | undefined, around: string): string[] {
   return out;
 }
 
+/** Mondays from ~2 months before `around` to ~12 months after, plus `current`'s week if outside. */
+function weekChoices(around: string, current?: string): string[] {
+  const first = mondayOf(monthStart(shiftMonth(around, -2)));
+  const out: string[] = [];
+  for (let i = 0; i < 64; i++) out.push(addDays(first, 7 * i));
+  if (current && !out.includes(mondayOf(current))) out.push(mondayOf(current));
+  return out.sort();
+}
+
 // ---------------------------------------------------------------------------
 // Small presentational pieces
 // ---------------------------------------------------------------------------
@@ -134,15 +178,18 @@ function Avatars({ owners }: { owners: Initiative['owners'] }) {
 function ItemChip({ item, onOpen, draggable }: { item: Initiative; onOpen: (id: string) => void; draggable?: boolean }) {
   const { colorOf } = useColors();
   const sp = spanOf(item);
+  // Items with their own ClickUp start/due dates are locked — never draggable
+  draggable = (draggable ?? true) && sp?.source !== 'dates';
   return (
     <button
       className={`chip ${item.done ? 'chip-done' : ''}`}
       style={{ borderLeftColor: colorOf(item) }}
       onClick={() => onOpen(item.id)}
       draggable={draggable}
-      onDragStart={draggable ? e => { e.dataTransfer.setData('text/roadmap-id', item.id); e.dataTransfer.effectAllowed = 'move'; } : undefined}
+      onDragStart={draggable ? e => { e.dataTransfer.setData(DRAG_TYPE, item.id); e.dataTransfer.effectAllowed = 'move'; } : undefined}
       title={`${item.name}\n${item.listName} · ${item.status}\n${SOURCE_LABEL[sourceOf(item)]}`}
     >
+      {sp?.source === 'dates' && <span className="bar-lock" title="Dates set on the ClickUp task">🔒</span>}
       <StatusDot color={item.statusColor} />
       <span className="chip-name">{item.name}</span>
       {item.bigSwing && <span className="chip-swing" title="Big Swing">★</span>}
@@ -161,29 +208,31 @@ function Legend({ meta }: { meta: RoadmapMeta }) {
         ? meta.pillars.map(p => <span key={p.id} className="legend-item"><span className="list-dot" style={{ background: pillarColor(p.name) }} />{p.name}</span>)
         : meta.lists.map(l => <span key={l.id} className="legend-item"><span className="list-dot" style={{ background: listColor(l.id) }} />{l.name}</span>)}
       <span className="legend-sep" />
-      <span className="legend-item"><span className="legend-bar" /> Task dates</span>
-      <span className="legend-item"><span className="legend-bar legend-bar-soft" /> Roadmap dates (no task dates)</span>
+      <span className="legend-item"><span className="legend-bar" /> 🔒 ClickUp task dates (read-only)</span>
+      <span className="legend-item"><span className="legend-bar legend-bar-soft" /> Roadmap Start/End (editable)</span>
     </div>
   );
 }
 
 // ---------------------------------------------------------------------------
-// Year view — 12 month cards
+// Overview — a rolling window of months starting at the current month
 // ---------------------------------------------------------------------------
 
-function YearView({ year, items, onOpenMonth, onOpenItem }: {
-  year: number; items: Initiative[]; onOpenMonth: (ym: string) => void; onOpenItem: (id: string) => void;
+function OverviewView({ months, items, onOpenMonth, onOpenItem }: {
+  months: string[]; items: Initiative[]; onOpenMonth: (ym: string) => void; onOpenItem: (id: string) => void;
 }) {
   const { colorOf, groupOf } = useColors();
   const nowYm = todayStr().slice(0, 7);
   const unplanned = items.filter(i => sourceOf(i) === 'none');
   const [showUnplanned, setShowUnplanned] = useState(false);
+  // Fewer months on screen → taller cards with more items listed
+  const perCard = months.length <= 3 ? 18 : months.length <= 6 ? 10 : 6;
+  const cols = months.length <= 3 ? 3 : months.length <= 6 ? 3 : 4;
 
   return (
     <>
-      <div className="year-grid">
-        {MONTH_NAMES.map((name, idx) => {
-          const key = ym(year, idx);
+      <div className={`year-grid ${months.length <= 3 ? 'year-grid-wide' : ''}`} style={{ '--cols': cols } as React.CSSProperties}>
+        {months.map(key => {
           const monthItems = items.filter(i => inMonth(i, key));
           const done = monthItems.filter(i => i.done).length;
           const pct = monthItems.length ? Math.round((done / monthItems.length) * 100) : 0;
@@ -192,35 +241,38 @@ function YearView({ year, items, onOpenMonth, onOpenItem }: {
             const g = groupOf(i) || '—';
             groups.set(g, { n: (groups.get(g)?.n || 0) + 1, color: colorOf(i) });
           });
-          const sorted = [...monthItems].sort((a, b) => Number(a.done) - Number(b.done) || Number(b.bigSwing) - Number(a.bigSwing));
+          const sortKey = (i: Initiative) => spanOf(i)?.start || '9999';
+          const sorted = [...monthItems].sort((a, b) => Number(a.done) - Number(b.done) || sortKey(a).localeCompare(sortKey(b)));
           return (
-            <div key={key} className={`month-card ${key === nowYm ? 'month-card-current' : ''} ${key < nowYm ? 'month-card-past' : ''}`}>
+            <DropZone key={key} target={{ kind: 'month', ym: key }} overClass="month-card-drop" className={`month-card ${key === nowYm ? 'month-card-current' : ''}`}>
               <button className="month-card-head" onClick={() => onOpenMonth(key)}>
-                <span className="month-card-name">{name}</span>
+                <span className="month-card-name">{monthLabel(key)}</span>
                 <span className="month-card-count">{monthItems.length}</span>
-                <span className="month-card-open">Open →</span>
+                {key === nowYm && <span className="week-now">This month</span>}
+                <span className="month-card-open">Open month →</span>
               </button>
               <div className="month-card-pillars">
                 {Array.from(groups.entries()).map(([g, v]) => (
                   <span key={g} className="pillar-tag" style={{ color: v.color, borderColor: v.color }} title={g}>
-                    {g.length > 14 ? g.slice(0, 13) + '…' : g} {v.n}
+                    {g.length > 18 ? g.slice(0, 17) + '…' : g} {v.n}
                   </span>
                 ))}
                 {monthItems.length > 0 && <span className="month-card-pct">{pct}% done</span>}
               </div>
-              <div className="progress-bar-bg" style={{ margin: '6px 0 8px' }}><div className="progress-bar-fill" style={{ width: pct + '%' }} /></div>
+              <div className="progress-bar-bg" style={{ margin: '8px 0 10px' }}><div className="progress-bar-fill" style={{ width: pct + '%' }} /></div>
               <div className="month-card-items">
-                {sorted.slice(0, 6).map(i => (
-                  <button key={i.id} className={`month-card-item ${i.done ? 'is-done' : ''}`} onClick={() => onOpenItem(i.id)} title={`${i.name} · ${i.listName}`}>
+                {sorted.slice(0, perCard).map(i => (
+                  <button key={i.id} className={`month-card-item ${i.done ? 'is-done' : ''}`} onClick={() => onOpenItem(i.id)} title={`${i.name} · ${i.listName} · ${i.status}`}>
                     <span className="pillar-bar" style={{ background: colorOf(i) }} />
                     <span className="month-card-item-name">{i.name}</span>
                     {i.bigSwing && <span className="chip-swing">★</span>}
+                    <span className="month-card-item-date">{dateRangeLabel(i) || 'no date'}</span>
                   </button>
                 ))}
-                {sorted.length > 6 && <button className="month-card-more" onClick={() => onOpenMonth(key)}>+{sorted.length - 6} more</button>}
-                {sorted.length === 0 && <div className="month-card-empty">Nothing planned</div>}
+                {sorted.length > perCard && <button className="month-card-more" onClick={() => onOpenMonth(key)}>+{sorted.length - perCard} more — open month</button>}
+                {sorted.length === 0 && <div className="month-card-empty">Nothing planned yet</div>}
               </div>
-            </div>
+            </DropZone>
           );
         })}
       </div>
@@ -229,7 +281,7 @@ function YearView({ year, items, onOpenMonth, onOpenItem }: {
         <div className="unplanned">
           <button className="unplanned-head" onClick={() => setShowUnplanned(s => !s)}>
             {showUnplanned ? '▾' : '▸'} Unplanned <span className="count-badge">{unplanned.length}</span>
-            <span className="unplanned-hint">No start/due date, roadmap dates, sprint or Target Month</span>
+            <span className="unplanned-hint">No dates or Target Month — open a month and drag these onto a week, or use the Backlog tab</span>
           </button>
           {showUnplanned && <div className="chip-wrap">{unplanned.map(i => <ItemChip key={i.id} item={i} onOpen={onOpenItem} />)}</div>}
         </div>
@@ -239,43 +291,72 @@ function YearView({ year, items, onOpenMonth, onOpenItem }: {
 }
 
 // ---------------------------------------------------------------------------
-// Week grid — day columns with draggable / resizable bars
+// Month view — weeks are the smallest unit. One column per week, one bar per item.
+// Dragging/resizing snaps to whole weeks and writes Roadmap Start (Mon) / End (Fri).
+// Items with their own ClickUp start/due dates are shown but locked.
 // ---------------------------------------------------------------------------
 
-type DragState = { id: string; mode: 'start' | 'end' | 'move'; source: Span['source']; startX: number; s0: string; e0: string; s: string; e: string; moved: boolean };
+type DragState = { id: string; mode: 'start' | 'end' | 'move'; startX: number; s0: string; e0: string; dS: number; dE: number; moved: boolean };
 
-function WeekGrid({ days, monthKey, items, onUpdate, onOpen, canRoadmapDate }: {
-  days: string[]; monthKey: string; items: Initiative[];
+function MonthView({ monthKey, items, lists, onUpdate, onOpen, onAdd }: {
+  monthKey: string; items: Initiative[]; lists: ListMeta[];
   onUpdate: (id: string, patch: InitiativeInput) => void; onOpen: (id: string) => void;
-  canRoadmapDate: (id: string) => boolean;
+  onAdd: (defaults: InitiativeInput) => void;
 }) {
-  const { colorOf } = useColors();
+  const { colorOf, groupOf, listColor } = useColors();
+  const weeks = useMemo(() => weeksOfMonth(monthKey), [monthKey]);
+  const today = todayStr();
+  const gridStart = weeks[0][0];
+  const gridEnd = weeks[weeks.length - 1][6];
+  const nW = weeks.length;
+  const weekIdx = (d: string) => Math.max(0, Math.min(nW - 1, Math.floor(diffDays(gridStart, d) / 7)));
+
   const gridRef = useRef<HTMLDivElement>(null);
   const [drag, setDrag] = useState<DragState | null>(null);
   const dragRef = useRef<DragState | null>(null);
-  const [dropDay, setDropDay] = useState<string | null>(null);
-  const today = todayStr();
-  const weekStart = days[0];
+
+  const [tray, setTray] = useState<'month' | 'unplanned' | 'all'>('month');
+  const [trayQuery, setTrayQuery] = useState('');
+  const [trayList, setTrayList] = useState('');
+  const [trayOpenOnly, setTrayOpenOnly] = useState(true);
+  const [groupByList, setGroupByList] = useState(true);
+
+  const monthItems = items.filter(i => inMonth(i, monthKey));
+  const dated = monthItems.filter(i => { const sp = spanOf(i); return sp && overlaps(sp.start, sp.end, gridStart, gridEnd); });
+  const monthOnly = monthItems.filter(i => !spanOf(i));
+  const unplanned = items.filter(i => sourceOf(i) === 'none' && !i.done);
+  const traySource = tray === 'month' ? monthOnly : tray === 'unplanned' ? unplanned : items.filter(i => !trayOpenOnly || !i.done);
+  const trayItems = traySource
+    .filter(i => !trayList || i.listId === trayList)
+    .filter(i => !trayQuery || i.name.toLowerCase().includes(trayQuery.toLowerCase()));
+
+  // Preview of a bar while dragging, in whole weeks
+  const preview = (i: Initiative) => {
+    const sp = spanOf(i)!;
+    if (drag?.id !== i.id) return { s: sp.start, e: sp.end };
+    return { s: addDays(mondayOf(drag.s0), 7 * drag.dS), e: addDays(fridayOf(drag.e0), 7 * drag.dE) };
+  };
 
   const begin = (e: React.PointerEvent, item: Initiative, mode: DragState['mode']) => {
     const sp = spanOf(item);
-    if (!sp || e.button !== 0) return;
+    if (!sp || sp.source === 'dates' || e.button !== 0) { if (e.button === 0) onOpen(item.id); return; }
     e.preventDefault();
     e.stopPropagation();
-    const st: DragState = { id: item.id, mode, source: sp.source, startX: e.clientX, s0: sp.start, e0: sp.end, s: sp.start, e: sp.end, moved: false };
+    const st: DragState = { id: item.id, mode, startX: e.clientX, s0: sp.start, e0: sp.end, dS: 0, dE: 0, moved: false };
     dragRef.current = st;
     setDrag(st);
+    const weeksSpan = Math.round(diffDays(mondayOf(sp.start), mondayOf(sp.end)) / 7);
 
     const onMove = (ev: PointerEvent) => {
       const cur = dragRef.current;
       if (!cur || !gridRef.current) return;
-      const colW = gridRef.current.getBoundingClientRect().width / 7;
+      const colW = gridRef.current.getBoundingClientRect().width / nW;
       const delta = Math.round((ev.clientX - cur.startX) / colW);
-      let s = cur.s0, en = cur.e0;
-      if (cur.mode === 'move') { s = addDays(cur.s0, delta); en = addDays(cur.e0, delta); }
-      if (cur.mode === 'start') { s = addDays(cur.s0, delta); if (s > cur.e0) s = cur.e0; }
-      if (cur.mode === 'end') { en = addDays(cur.e0, delta); if (en < cur.s0) en = cur.s0; }
-      const next = { ...cur, s, e: en, moved: cur.moved || Math.abs(ev.clientX - cur.startX) > 3 };
+      let dS = 0, dE = 0;
+      if (cur.mode === 'move') { dS = delta; dE = delta; }
+      if (cur.mode === 'start') dS = Math.min(delta, weeksSpan);   // start can't pass the end week
+      if (cur.mode === 'end') dE = Math.max(delta, -weeksSpan);    // end can't pass the start week
+      const next = { ...cur, dS, dE, moved: cur.moved || Math.abs(ev.clientX - cur.startX) > 3 };
       dragRef.current = next;
       setDrag(next);
     };
@@ -287,157 +368,252 @@ function WeekGrid({ days, monthKey, items, onUpdate, onOpen, canRoadmapDate }: {
       setDrag(null);
       if (!cur) return;
       if (!cur.moved && cur.mode === 'move') { onOpen(cur.id); return; }
-      if (cur.s === cur.s0 && cur.e === cur.e0) return;
-      // Write back to whichever source placed the item on the calendar
-      if (cur.source === 'roadmap') onUpdate(cur.id, { roadmapStart: cur.s, roadmapEnd: cur.e });
-      else onUpdate(cur.id, { startDate: cur.s, dueDate: cur.e });
+      const start = addDays(mondayOf(cur.s0), 7 * cur.dS);
+      const end = addDays(fridayOf(cur.e0), 7 * cur.dE);
+      if (start !== cur.s0 || end !== cur.e0) onUpdate(cur.id, { roadmapStart: start, roadmapEnd: end });
     };
     window.addEventListener('pointermove', onMove);
     window.addEventListener('pointerup', onUp);
   };
 
-  const rows = items
-    .map(i => {
-      const sp = spanOf(i)!;
-      const s = drag?.id === i.id ? drag.s : sp.start;
-      const e = drag?.id === i.id ? drag.e : sp.end;
-      return { item: i, s, e, source: sp.source };
-    })
-    .sort((a, b) => a.s.localeCompare(b.s) || a.e.localeCompare(b.e));
+  // Rows: optionally grouped by list
+  type Row = { kind: 'group'; label: string; color: string; n: number } | { kind: 'item'; item: Initiative };
+  const sortKey = (i: Initiative) => spanOf(i)!.start;
+  const rows: Row[] = [];
+  if (groupByList) {
+    for (const l of lists) {
+      const its = dated.filter(i => i.listId === l.id).sort((a, b) => sortKey(a).localeCompare(sortKey(b)));
+      if (!its.length) continue;
+      rows.push({ kind: 'group', label: l.name, color: listColor(l.id), n: its.length });
+      its.forEach(item => rows.push({ kind: 'item', item }));
+    }
+  } else {
+    [...dated].sort((a, b) => sortKey(a).localeCompare(sortKey(b))).forEach(item => rows.push({ kind: 'item', item }));
+  }
+
+  const done = monthItems.filter(i => i.done).length;
+  const groups = new Map<string, { n: number; color: string }>();
+  monthItems.forEach(i => { const g = groupOf(i) || '—'; groups.set(g, { n: (groups.get(g)?.n || 0) + 1, color: colorOf(i) }); });
+  const cols = `repeat(${nW}, minmax(150px, 1fr))`;
 
   return (
-    <div className="week-grid-wrap">
-      <div className="week-grid-head">
-        {days.map((d, idx) => (
-          <div
-            key={d}
-            className={`day-head ${d.slice(0, 7) !== monthKey ? 'day-out' : ''} ${d === today ? 'day-today' : ''} ${idx >= 5 ? 'day-weekend' : ''} ${dropDay === d ? 'day-drop' : ''}`}
-            onDragOver={e => { if (e.dataTransfer.types.includes('text/roadmap-id')) { e.preventDefault(); setDropDay(d); } }}
-            onDragLeave={() => setDropDay(x => (x === d ? null : x))}
-            onDrop={e => {
-              const id = e.dataTransfer.getData('text/roadmap-id');
-              setDropDay(null);
-              if (!id) return;
-              if (canRoadmapDate(id)) onUpdate(id, { roadmapStart: d, roadmapEnd: d });
-              else onUpdate(id, { startDate: d, dueDate: d });
-            }}
-          >
-            <span>{DAY_SHORT[idx]}</span>
-            <strong>{toUTC(d).getUTCDate()}</strong>
+    <div className="month-layout">
+      <div className="month-view">
+        <div className="month-view-tools">
+          <label className="tray-check"><input type="checkbox" checked={groupByList} onChange={e => setGroupByList(e.target.checked)} /> Group by list</label>
+          <span className="month-view-hint">Drag a bar to move it by week · drag its edges to add or remove weeks · drop items from the sidebar onto a week · 🔒 = dates set on the ClickUp task (change them in ClickUp)</span>
+        </div>
+
+        <div className="gantt">
+          <div className="gantt-head" style={{ gridTemplateColumns: cols }}>
+            {weeks.map((days, wi) => {
+              const isCurrent = days[0] <= today && today <= days[6];
+              return (
+                <DropZone key={days[0]} target={{ kind: 'week', start: days[0], end: days[4] }} overClass="week-drop"
+                  className={`gantt-week ${isCurrent ? 'gantt-week-current' : ''} ${days[6] < today ? 'gantt-week-past' : ''}`}>
+                  <div className="gantt-week-title">Week {wi + 1}{isCurrent && <span className="week-now">Now</span>}</div>
+                  <div className="gantt-week-range">{shortDate(days[0])} – {shortDate(days[4])}</div>
+                </DropZone>
+              );
+            })}
           </div>
-        ))}
+
+          <div className="gantt-body" ref={gridRef} style={{ gridTemplateColumns: cols }}>
+            {weeks.map((days, wi) => (
+              <DropZone key={days[0]} target={{ kind: 'week', start: days[0], end: days[4] }} overClass="week-drop"
+                className={`gantt-col ${days[0] <= today && today <= days[6] ? 'gantt-col-current' : ''}`}
+                style={{ gridColumn: wi + 1, gridRow: `1 / span ${Math.max(rows.length, 1) + 1}` }} />
+            ))}
+            {rows.length === 0 && (
+              <div className="week-empty" style={{ gridColumn: `1 / ${nW + 1}`, gridRow: 1 }}>
+                Nothing scheduled this month yet — drag items from the sidebar onto a week.
+              </div>
+            )}
+            {rows.map((r, idx) => {
+              if (r.kind === 'group') {
+                return (
+                  <div key={'g' + r.label} className="gantt-group" style={{ gridColumn: `1 / ${nW + 1}`, gridRow: idx + 1 }}>
+                    <span className="list-dot" style={{ background: r.color }} />{r.label}<span className="count-badge">{r.n}</span>
+                  </div>
+                );
+              }
+              const item = r.item;
+              const src = spanOf(item)!.source;
+              const locked = src === 'dates';
+              const { s, e } = preview(item);
+              const a = weekIdx(s < gridStart ? gridStart : s);
+              const b = weekIdx(e > gridEnd ? gridEnd : e);
+              const clipL = s < gridStart;
+              const clipR = e > gridEnd;
+              const active = drag?.id === item.id;
+              return (
+                <div
+                  key={item.id}
+                  className={`bar ${item.done ? 'bar-done' : ''} ${active ? 'bar-active' : ''} ${locked ? 'bar-locked' : 'bar-soft'} ${clipL ? 'clip-l' : ''} ${clipR ? 'clip-r' : ''}`}
+                  style={{ gridColumn: `${a + 1} / ${b + 2}`, gridRow: idx + 1, '--bar': colorOf(item) } as React.CSSProperties}
+                  onPointerDown={ev => begin(ev, item, 'move')}
+                  title={`${item.name} · ${item.listName} · ${item.status}\n${shortDate(s)} – ${shortDate(e)}\n${locked ? '🔒 Dates come from the ClickUp task’s start/due date — change them in ClickUp.' : 'Roadmap dates · drag to move by week, drag edges to resize'}`}
+                >
+                  {!clipL && !locked && <span className="bar-handle bar-handle-l" onPointerDown={ev => begin(ev, item, 'start')} />}
+                  {clipL && <span className="bar-arrow">‹</span>}
+                  {locked && <span className="bar-lock">🔒</span>}
+                  <StatusDot color={item.statusColor} />
+                  <span className="bar-name">{item.name}</span>
+                  {item.bigSwing && <span className="chip-swing">★</span>}
+                  <span className="bar-dates">{active ? `${shortDate(s)} – ${shortDate(e)}` : ''}</span>
+                  <Avatars owners={item.owners} />
+                  {clipR && <span className="bar-arrow">›</span>}
+                  {!clipR && !locked && <span className="bar-handle bar-handle-r" onPointerDown={ev => begin(ev, item, 'end')} />}
+                </div>
+              );
+            })}
+          </div>
+        </div>
       </div>
-      <div className="week-grid" ref={gridRef}>
-        {days.map((d, idx) => (
-          <div key={d} className={`day-col ${idx >= 5 ? 'day-weekend' : ''} ${d === today ? 'day-today' : ''}`} style={{ gridColumn: idx + 1, gridRow: `1 / span ${Math.max(rows.length, 1)}` }} />
-        ))}
-        {rows.length === 0 && <div className="week-empty" style={{ gridColumn: '1 / 8', gridRow: 1 }}>Nothing dated this week — drag a chip from “Planned for this month” onto a day above.</div>}
-        {rows.map(({ item, s, e, source }, r) => {
-          const a = Math.max(0, diffDays(weekStart, s));
-          const b = Math.min(6, diffDays(weekStart, e));
-          if (b < 0 || a > 6) return null;
-          const clipL = s < weekStart;
-          const clipR = e > days[6];
-          const active = drag?.id === item.id;
-          const resizable = true;
-          return (
-            <div
-              key={item.id}
-              className={`bar ${item.done ? 'bar-done' : ''} ${active ? 'bar-active' : ''} ${source !== 'dates' ? 'bar-soft' : ''} ${clipL ? 'clip-l' : ''} ${clipR ? 'clip-r' : ''}`}
-              style={{ gridColumn: `${a + 1} / ${b + 2}`, gridRow: r + 1, '--bar': colorOf(item) } as React.CSSProperties}
-              onPointerDown={e => begin(e, item, 'move')}
-              title={`${item.name} · ${item.listName}\n${shortDate(s)}${s !== e ? ` – ${shortDate(e)}` : ''} — ${SOURCE_LABEL[source]}\nDrag to move · drag edges to change dates · click for details`}
-            >
-              {!clipL && resizable && <span className="bar-handle bar-handle-l" onPointerDown={e => begin(e, item, 'start')} />}
-              {clipL && <span className="bar-arrow">‹</span>}
-              <StatusDot color={item.statusColor} />
-              <span className="bar-name">{item.name}</span>
-              {item.bigSwing && <span className="chip-swing">★</span>}
-              {active && <span className="bar-dates">{shortDate(s)}{s !== e ? ` – ${shortDate(e)}` : ''}</span>}
-              <Avatars owners={item.owners} />
-              {clipR && <span className="bar-arrow">›</span>}
-              {!clipR && resizable && <span className="bar-handle bar-handle-r" onPointerDown={e => begin(e, item, 'end')} />}
-            </div>
-          );
-        })}
-      </div>
+
+      <aside className="month-side">
+        <div className="side-card">
+          <div className="side-title">{monthLabel(monthKey)}</div>
+          <div className="side-stats">
+            <div><strong>{monthItems.length}</strong><span>items</span></div>
+            <div><strong>{dated.length}</strong><span>scheduled</span></div>
+            <div><strong>{monthOnly.length}</strong><span>no dates</span></div>
+            <div><strong>{monthItems.length ? Math.round((done / monthItems.length) * 100) : 0}%</strong><span>done</span></div>
+          </div>
+          <div className="side-groups">
+            {Array.from(groups.entries()).map(([g, v]) => (
+              <div key={g} className="side-group"><span className="list-dot" style={{ background: v.color }} /><span className="side-group-name">{g}</span><span className="side-group-n">{v.n}</span></div>
+            ))}
+          </div>
+        </div>
+
+        <div className="side-card side-tray">
+          <div className="view-toggle tray-tabs">
+            <button className={tray === 'month' ? 'active' : ''} onClick={() => setTray('month')} title={`Target Month is ${monthLabel(monthKey)}, but no dates`}>No dates <span className="count-badge">{monthOnly.length}</span></button>
+            <button className={tray === 'unplanned' ? 'active' : ''} onClick={() => setTray('unplanned')} title="Open tasks with no dates and no Target Month">Unplanned <span className="count-badge">{unplanned.length}</span></button>
+            <button className={tray === 'all' ? 'active' : ''} onClick={() => setTray('all')} title="Every task in every list">All</button>
+          </div>
+          <div className="tray-filters">
+            <input className="filter-input tray-search" placeholder="Search…" value={trayQuery} onChange={e => setTrayQuery(e.target.value)} />
+            <select className="filter-select" value={trayList} onChange={e => setTrayList(e.target.value)}>
+              <option value="">All lists</option>
+              {lists.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
+            </select>
+            {tray === 'all' && <label className="tray-check"><input type="checkbox" checked={trayOpenOnly} onChange={e => setTrayOpenOnly(e.target.checked)} /> Open only</label>}
+          </div>
+          <p className="month-only-hint" style={{ marginTop: 0 }}>Drag onto a <strong>week</strong> to set Roadmap Start (Mon) and End (Fri). Items already on the roadmap keep their length in weeks.</p>
+          <div className="tray-list">
+            {trayItems.length
+              ? trayItems.map(i => <ItemChip key={i.id} item={i} onOpen={onOpen} draggable={sourceOf(i) !== 'dates'} />)
+              : <div className="month-card-empty">{trayQuery ? 'No matches' : tray === 'month' ? 'Everything this month has dates.' : 'Nothing here.'}</div>}
+          </div>
+          {tray === 'month' && <button className="btn btn-ghost btn-sm" style={{ marginTop: 8 }} onClick={() => onAdd({ roadmapMonth: monthKey })}>+ Add to {monthLabel(monthKey).split(' ')[0]}</button>}
+        </div>
+      </aside>
     </div>
   );
 }
 
 // ---------------------------------------------------------------------------
-// Month view — weeks that expand into days
+// Backlog — every item in every list, with month drop targets
 // ---------------------------------------------------------------------------
 
-function MonthView({ monthKey, items, onUpdate, onOpen, onAdd, canRoadmapDate }: {
-  monthKey: string; items: Initiative[];
-  onUpdate: (id: string, patch: InitiativeInput) => void; onOpen: (id: string) => void;
-  onAdd: (defaults: InitiativeInput) => void; canRoadmapDate: (id: string) => boolean;
-}) {
-  const weeks = useMemo(() => weeksOfMonth(monthKey), [monthKey]);
-  const today = todayStr();
-  const currentWeek = (ws: string[][]) => ws.find(w => w[0] <= today && today <= w[6]);
-  const [expanded, setExpanded] = useState<Set<string>>(() => new Set(currentWeek(weeks) ? [currentWeek(weeks)![0]] : []));
-  useEffect(() => {
-    const cur = currentWeek(weeks);
-    setExpanded(new Set(cur ? [cur[0]] : []));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [monthKey]);
+function placementLabel(i: Initiative): string {
+  const src = sourceOf(i);
+  if (src === 'none') return 'Unplanned';
+  if (src === 'month') return `${monthLabel(i.roadmapMonth, true)} · no dates`;
+  return dateRangeLabel(i) + (src === 'roadmap' ? ' · roadmap' : src === 'sprint' ? ' · sprint' : ' · ClickUp dates');
+}
 
-  const monthItems = items.filter(i => inMonth(i, monthKey));
-  const monthOnly = monthItems.filter(i => !spanOf(i));
-  const toggle = (k: string) => setExpanded(prev => { const n = new Set(prev); n.has(k) ? n.delete(k) : n.add(k); return n; });
+function BacklogView({ items, lists, onOpen, onSchedule }: {
+  items: Initiative[]; lists: ListMeta[]; onOpen: (id: string) => void; onSchedule: (id: string, t: Target) => void;
+}) {
+  const { listColor } = useColors();
+  const nowYm = todayStr().slice(0, 7);
+  const months = Array.from({ length: 12 }, (_, i) => shiftMonth(nowYm, i));
+  const [show, setShow] = useState<'unplanned' | 'open' | 'all'>('open');
+  const [query, setQuery] = useState('');
+
+  const visible = items.filter(i => {
+    if (show === 'unplanned' && sourceOf(i) !== 'none') return false;
+    if (show !== 'all' && i.done) return false;
+    if (query && !i.name.toLowerCase().includes(query.toLowerCase())) return false;
+    return true;
+  });
 
   return (
-    <div className="month-view">
-      <div className="month-view-tools">
-        <button className="btn btn-ghost btn-sm" onClick={() => setExpanded(new Set(weeks.map(w => w[0])))}>Expand all weeks</button>
-        <button className="btn btn-ghost btn-sm" onClick={() => setExpanded(new Set())}>Collapse all</button>
-        <span className="month-view-hint">Click a week to open its days · drag a bar to move it · drag its edges to change dates</span>
+    <div className="backlog">
+      <div className="month-strip">
+        {months.map(m => {
+          const n = items.filter(i => inMonth(i, m)).length;
+          return (
+            <DropZone key={m} target={{ kind: 'month', ym: m }} className={`month-drop ${m === nowYm ? 'month-drop-current' : ''}`} overClass="month-drop-over">
+              <strong>{monthLabel(m, true)}</strong>
+              <span>{n} item{n === 1 ? '' : 's'}</span>
+            </DropZone>
+          );
+        })}
+      </div>
+      <p className="month-only-hint" style={{ margin: '0 0 12px' }}>
+        Drag a card onto a month to plan it there (sets Target Month where the list has it, otherwise Roadmap Start/End across that month’s weeks),
+        or use “Plan for…”. Then open the month and drag it onto a specific week. 🔒 items have their own ClickUp dates and can’t be moved here.
+      </p>
+
+      <div className="backlog-tools">
+        <div className="view-toggle" style={{ marginLeft: 0 }}>
+          <button className={show === 'unplanned' ? 'active' : ''} onClick={() => setShow('unplanned')}>Unplanned</button>
+          <button className={show === 'open' ? 'active' : ''} onClick={() => setShow('open')}>All open</button>
+          <button className={show === 'all' ? 'active' : ''} onClick={() => setShow('all')}>Everything</button>
+        </div>
+        <input className="filter-input" placeholder="Search all lists…" value={query} onChange={e => setQuery(e.target.value)} />
+        <span className="month-window-range">{visible.length} items</span>
       </div>
 
-      {weeks.map((days, wi) => {
-        const key = days[0];
-        const weekItems = monthItems.filter(i => { const sp = spanOf(i); return sp && overlaps(sp.start, sp.end, days[0], days[6]); });
-        const isOpen = expanded.has(key);
-        const isCurrent = days[0] <= today && today <= days[6];
-        const firstInMonth = days.find(d => d.slice(0, 7) === monthKey)!;
-        return (
-          <section key={key} className={`week ${isOpen ? 'week-open' : ''} ${isCurrent ? 'week-current' : ''}`}>
-            <div className="week-head">
-              <button className="week-toggle" onClick={() => toggle(key)}>
-                <span className="week-caret">{isOpen ? '▾' : '▸'}</span>
-                <span className="week-title">Week {wi + 1}</span>
-                <span className="week-range">{shortDate(days[0])} – {shortDate(days[6])}</span>
-                <span className="count-badge">{weekItems.length}</span>
-                {isCurrent && <span className="week-now">This week</span>}
-              </button>
-              <button className="btn btn-ghost btn-sm week-add" onClick={() => onAdd({ roadmapStart: firstInMonth, roadmapEnd: days.filter(d => d.slice(0, 7) === monthKey).slice(-1)[0], roadmapMonth: monthKey })}>+ Add</button>
-            </div>
-            {isOpen
-              ? <WeekGrid days={days} monthKey={monthKey} items={weekItems} onUpdate={onUpdate} onOpen={onOpen} canRoadmapDate={canRoadmapDate} />
-              : weekItems.length > 0 && <div className="chip-wrap week-chips">{weekItems.map(i => <ItemChip key={i.id} item={i} onOpen={onOpen} />)}</div>}
-          </section>
-        );
-      })}
-
-      <section className="week month-only">
-        <div className="week-head">
-          <div className="week-toggle" style={{ cursor: 'default' }}>
-            <span className="week-title">Planned for {MONTH_NAMES[Number(monthKey.slice(5)) - 1]} — no dates yet</span>
-            <span className="count-badge">{monthOnly.length}</span>
-          </div>
-          <button className="btn btn-ghost btn-sm week-add" onClick={() => onAdd({ roadmapMonth: monthKey })}>+ Add</button>
-        </div>
-        {monthOnly.length > 0
-          ? (
-            <>
-              <div className="chip-wrap week-chips">{monthOnly.map(i => <ItemChip key={i.id} item={i} onOpen={onOpen} draggable />)}</div>
-              <p className="month-only-hint">These only have a Target Month. Drag one onto a day in an expanded week to set its Roadmap Start/End Date, then drag the bar’s edges to stretch it.</p>
-            </>
-          )
-          : <p className="month-only-hint">Everything this month has dates.</p>}
-      </section>
+      <div className="backlog-cols">
+        {lists.map(l => {
+          const colItems = visible
+            .filter(i => i.listId === l.id)
+            .sort((a, b) => (spanOf(a)?.start || a.roadmapMonth || '9999').localeCompare(spanOf(b)?.start || b.roadmapMonth || '9999'));
+          return (
+            <section key={l.id} className="backlog-col">
+              <div className="backlog-col-head">
+                <span className="list-dot" style={{ background: listColor(l.id) }} />
+                <span className="backlog-col-name">{l.name}</span>
+                <span className="count-badge">{colItems.length}</span>
+              </div>
+              <div className="backlog-col-body">
+                {colItems.map(i => (
+                  <div
+                    key={i.id}
+                    className={`backlog-card ${i.done ? 'chip-done' : ''} ${sourceOf(i) === 'dates' ? 'backlog-locked' : ''}`}
+                    draggable={sourceOf(i) !== 'dates'}
+                    onDragStart={e => { e.dataTransfer.setData(DRAG_TYPE, i.id); e.dataTransfer.effectAllowed = 'move'; }}
+                  >
+                    <button className="backlog-card-name" onClick={() => onOpen(i.id)} title={i.name}>{i.name}</button>
+                    <div className="backlog-card-meta">
+                      <span className="status-text"><StatusDot color={i.statusColor} /> {i.status}</span>
+                      <span className={`backlog-place ${sourceOf(i) === 'none' ? 'is-unplanned' : ''}`}>{placementLabel(i)}</span>
+                      <Avatars owners={i.owners} />
+                    </div>
+                    {sourceOf(i) === 'dates'
+                      ? <div className="backlog-locked-note">🔒 Dated in ClickUp</div>
+                      : <select
+                      className="backlog-plan"
+                      value=""
+                      onChange={e => e.target.value && onSchedule(i.id, { kind: 'month', ym: e.target.value })}
+                      title="Plan for a month"
+                    >
+                      <option value="">Plan for…</option>
+                      {months.map(m => <option key={m} value={m}>{monthLabel(m)}</option>)}
+                    </select>}
+                  </div>
+                ))}
+                {colItems.length === 0 && <div className="month-card-empty">Nothing here</div>}
+              </div>
+            </section>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -537,34 +713,44 @@ function ItemFields({ value, list, meta, monthAround, onChange }: {
         )}
       </div>
 
-      <div className="form-section-label">Dates <span>— the task’s own start/due dates win; roadmap dates are used only when those are empty</span></div>
-      <div className="form-row">
-        <div className="form-group">
-          <label className="form-label">Start date</label>
-          <input type="date" className="form-input" value={value.startDate || ''} onChange={e => onChange({ startDate: e.target.value })} />
-        </div>
-        <div className="form-group">
-          <label className="form-label">Due date</label>
-          <input type="date" className="form-input" value={value.dueDate || ''} onChange={e => onChange({ dueDate: e.target.value })} />
-        </div>
-      </div>
-      {(list.fields.roadmapStart || list.fields.roadmapEnd) && (
-        <div className="form-row">
-          {list.fields.roadmapStart && (
-            <div className="form-group">
-              <label className="form-label">Roadmap Start Date</label>
-              <input type="date" className="form-input" value={value.roadmapStart || ''} onChange={e => onChange({ roadmapStart: e.target.value })} />
-            </div>
-          )}
-          {list.fields.roadmapEnd && (
-            <div className="form-group">
-              <label className="form-label">Roadmap End Date</label>
-              <input type="date" className="form-input" value={value.roadmapEnd || ''} onChange={e => onChange({ roadmapEnd: e.target.value })} />
-            </div>
-          )}
+      <div className="form-section-label">Roadmap timing <span>— planned in whole weeks (Mon–Fri); writes Roadmap Start/End Date</span></div>
+      {hasNative && (
+        <div className="locked-dates">
+          🔒 This task has its own ClickUp dates: <strong>{value.startDate ? shortDate(value.startDate) : '—'} → {value.dueDate ? shortDate(value.dueDate) : '—'}</strong>.
+          They take priority on the roadmap and can only be changed in ClickUp.
         </div>
       )}
-      {hasNative && (value.roadmapStart || value.roadmapEnd) && <p className="field-hint">Roadmap dates are set but not shown — this task’s own start/due dates take priority.</p>}
+      {list.fields.roadmapStart && list.fields.roadmapEnd ? (
+        <div className="form-row">
+          <div className="form-group">
+            <label className="form-label">From week</label>
+            <select className="form-select" value={value.roadmapStart ? mondayOf(value.roadmapStart) : ''} disabled={hasNative}
+              onChange={e => {
+                const mon = e.target.value;
+                if (!mon) return onChange({ roadmapStart: '', roadmapEnd: '' });
+                const keepEnd = value.roadmapEnd && value.roadmapEnd >= mon ? fridayOf(value.roadmapEnd) : fridayOf(mon);
+                onChange({ roadmapStart: mon, roadmapEnd: keepEnd });
+              }}>
+              <option value="">Not scheduled</option>
+              {weekChoices(monthAround, value.roadmapStart).map(m => <option key={m} value={m}>Week of {shortDate(m)}, {m.slice(0, 4)}</option>)}
+            </select>
+          </div>
+          <div className="form-group">
+            <label className="form-label">Through week</label>
+            <select className="form-select" value={value.roadmapEnd ? mondayOf(value.roadmapEnd) : ''} disabled={hasNative || !value.roadmapStart}
+              onChange={e => {
+                const mon = e.target.value;
+                if (!mon) return;
+                const start = value.roadmapStart && mondayOf(value.roadmapStart) <= mon ? mondayOf(value.roadmapStart) : mon;
+                onChange({ roadmapStart: start, roadmapEnd: fridayOf(mon) });
+              }}>
+              {!value.roadmapStart && <option value="">—</option>}
+              {weekChoices(monthAround, value.roadmapEnd).filter(m => !value.roadmapStart || m >= mondayOf(value.roadmapStart)).map(m => <option key={m} value={m}>Week of {shortDate(m)} (ends {shortDate(fridayOf(m))})</option>)}
+            </select>
+          </div>
+        </div>
+      ) : <p className="field-hint">The “{list.name}” list is missing the Roadmap Start/End Date fields in ClickUp.</p>}
+      {value.roadmapStart && <p className="field-hint">Roadmap: {shortDate(value.roadmapStart)} → {value.roadmapEnd ? shortDate(value.roadmapEnd) : '—'}{hasNative ? ' (not shown — task dates take priority)' : ''}</p>}
       <div className="form-row">
         {list.fields.roadmapMonth && (
           <div className="form-group">
@@ -577,7 +763,6 @@ function ItemFields({ value, list, meta, monthAround, onChange }: {
           </div>
         )}
       </div>
-      {!(list.fields.roadmapStart && list.fields.roadmapEnd) && <p className="field-hint">The “{list.name}” list is missing the Roadmap Start/End Date fields in ClickUp.</p>}
 
       {list.fields.sprint && (
         <div className="form-group">
@@ -726,9 +911,17 @@ export default function RoadmapPage() {
   const [error, setError] = useState('');
   const [pending, setPending] = useState(0);
 
-  const [year, setYear] = useState(() => new Date().getFullYear());
+  const [from, setFrom] = useState(() => todayStr().slice(0, 7));
+  const [span, setSpan] = useState(3);
   const [month, setMonth] = useState<string | null>(null);
-  const [view, setView] = useState<'calendar' | 'list'>('calendar');
+  const [view, setViewState] = useState<'calendar' | 'list' | 'backlog'>('calendar');
+  const setView = useCallback((v: 'calendar' | 'list' | 'backlog') => {
+    setViewState(v);
+    const q = new URLSearchParams(window.location.search);
+    if (v === 'calendar') q.delete('view'); else q.set('view', v);
+    const qs = q.toString();
+    window.history.replaceState(null, '', window.location.pathname + (qs ? `?${qs}` : ''));
+  }, []);
   const [showFilters, setShowFilters] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [addDefaults, setAddDefaults] = useState<InitiativeInput | null>(null);
@@ -743,17 +936,29 @@ export default function RoadmapPage() {
 
   // --- URL <-> navigation ---
   useEffect(() => {
-    const sync = () => { const u = readUrl(); setYear(u.year); setMonth(u.month); };
+    const sync = () => {
+      const u = readUrl(); setFrom(u.from); setSpan(u.span); setMonth(u.month);
+      const v = new URLSearchParams(window.location.search).get('view');
+      setView(v === 'list' || v === 'backlog' ? v : 'calendar');
+    };
     sync();
     window.addEventListener('popstate', sync);
     return () => window.removeEventListener('popstate', sync);
   }, []);
 
-  const navigate = useCallback((next: { year: number; month: string | null }) => {
-    setYear(next.year);
+  const navigate = useCallback((next: { from: string; span: number; month: string | null }) => {
+    setFrom(next.from);
+    setSpan(next.span);
     setMonth(next.month);
-    const q = next.month ? `?month=${next.month}` : next.year !== new Date().getFullYear() ? `?year=${next.year}` : '';
-    window.history.pushState(null, '', window.location.pathname + q);
+    const nowYm = todayStr().slice(0, 7);
+    const q = new URLSearchParams();
+    if (next.month) q.set('month', next.month);
+    else {
+      if (next.from !== nowYm) q.set('from', next.from);
+      if (next.span !== 3) q.set('span', String(next.span));
+    }
+    const qs = q.toString();
+    window.history.pushState(null, '', window.location.pathname + (qs ? `?${qs}` : ''));
   }, []);
 
   // --- Data ---
@@ -838,10 +1043,50 @@ export default function RoadmapPage() {
     if (target) updateItem(i.id, { status: target.name });
   }, [listOf, updateItem]);
 
-  const canRoadmapDate = useCallback((id: string) => {
+  /**
+   * Drop / plan an item onto a month or a week. Writes ONLY Roadmap Start/End Date
+   * (Monday → Friday) and Target Month — never the ClickUp task's own start/due dates.
+   * Items that have their own start/due dates are locked (those dates take priority).
+   */
+  const scheduleTo = useCallback((id: string, t: Target) => {
     const it = items.find(i => i.id === id);
-    return !!(it && listOf(it.listId)?.fields.roadmapStart && listOf(it.listId)?.fields.roadmapEnd);
-  }, [items, listOf]);
+    if (!it) return;
+    const list = listOf(it.listId);
+    const sp = spanOf(it);
+    if (sp?.source === 'dates') {
+      setError(`“${it.name}” has its own start/due date in ClickUp, which takes priority. Change those dates in ClickUp — the roadmap won't modify them.`);
+      return;
+    }
+    if (!list?.fields.roadmapStart || !list?.fields.roadmapEnd) {
+      setError(`The “${it.listName}” list is missing the Roadmap Start/End Date fields in ClickUp.`);
+      return;
+    }
+    // Length in weeks is preserved when moving something already on the roadmap
+    const weeksLen = sp ? Math.round(diffDays(mondayOf(sp.start), mondayOf(sp.end)) / 7) : 0;
+    let patch: InitiativeInput;
+    if (t.kind === 'week') {
+      const start = mondayOf(t.start);
+      patch = { roadmapStart: start, roadmapEnd: addDays(fridayOf(start), 7 * weeksLen) };
+    } else if (t.kind === 'day') {
+      const start = mondayOf(t.date);
+      patch = { roadmapStart: start, roadmapEnd: addDays(fridayOf(start), 7 * weeksLen) };
+    } else {
+      const monthOk = !!list.fields.roadmapMonth && (!list.monthOptions.length || list.monthOptions.includes(t.ym));
+      if (sp) {
+        // Already scheduled: move to the first week of that month, same length
+        const start = mondayOf(monthStart(t.ym)) < monthStart(t.ym) ? addDays(mondayOf(monthStart(t.ym)), 7) : mondayOf(monthStart(t.ym));
+        patch = { roadmapStart: start, roadmapEnd: addDays(fridayOf(start), 7 * weeksLen) };
+        if (monthOk) patch.roadmapMonth = t.ym;
+      } else if (monthOk) {
+        patch = { roadmapMonth: t.ym };
+      } else {
+        // No Target Month on this list → plan it across the month's weeks
+        const first = mondayOf(monthStart(t.ym)) < monthStart(t.ym) ? addDays(mondayOf(monthStart(t.ym)), 7) : mondayOf(monthStart(t.ym));
+        patch = { roadmapStart: first, roadmapEnd: fridayOf(monthEnd(t.ym)) > monthEnd(t.ym) ? addDays(fridayOf(monthEnd(t.ym)), -7) : fridayOf(monthEnd(t.ym)) };
+      }
+    }
+    updateItem(id, patch);
+  }, [items, listOf, updateItem]);
 
   // --- Colors ---
   const colors = useMemo<Colors>(() => {
@@ -877,9 +1122,10 @@ export default function RoadmapPage() {
   const activeFilters = [fList, fPillar, fStatus, fPriority, fOwner, fSwing, search].filter(Boolean).length;
   const clearFilters = () => { setSearch(''); setFList(''); setFPillar(''); setFStatus(''); setFPriority(''); setFOwner(''); setFSwing(''); };
 
+  const windowMonths = Array.from({ length: span }, (_, i) => shiftMonth(from, i));
   const scoped = month
     ? filtered.filter(i => inMonth(i, month))
-    : filtered.filter(i => MONTH_NAMES.some((_, m) => inMonth(i, ym(year, m))));
+    : filtered.filter(i => windowMonths.some(m => inMonth(i, m)));
   const done = scoped.filter(i => i.done).length;
   const pct = scoped.length ? Math.round((done / scoped.length) * 100) : 0;
   const selected = items.find(i => i.id === selectedId) || null;
@@ -895,12 +1141,15 @@ export default function RoadmapPage() {
     );
   }
 
-  const goPrev = () => month ? navigate({ year: Number(shiftMonth(month, -1).slice(0, 4)), month: shiftMonth(month, -1) }) : navigate({ year: year - 1, month: null });
-  const goNext = () => month ? navigate({ year: Number(shiftMonth(month, 1).slice(0, 4)), month: shiftMonth(month, 1) }) : navigate({ year: year + 1, month: null });
-  const goToday = () => navigate({ year: new Date().getFullYear(), month: month ? todayStr().slice(0, 7) : null });
+  const nowYm = todayStr().slice(0, 7);
+  const goPrev = () => navigate(month ? { from, span, month: shiftMonth(month, -1) } : { from: shiftMonth(from, -1), span, month: null });
+  const goNext = () => navigate(month ? { from, span, month: shiftMonth(month, 1) } : { from: shiftMonth(from, 1), span, month: null });
+  const goToday = () => navigate(month ? { from, span, month: nowYm } : { from: nowYm, span, month: null });
+  const windowLabel = `${monthLabel(windowMonths[0], true)} – ${monthLabel(windowMonths[windowMonths.length - 1], true)}`;
 
   return (
     <ColorCtx.Provider value={colors}>
+    <ScheduleCtx.Provider value={scheduleTo}>
       <div className="app">
         {pending > 0 && <div className="saving-indicator">Saving to ClickUp…</div>}
 
@@ -932,12 +1181,17 @@ export default function RoadmapPage() {
         <div className="month-window">
           <div className="month-window-left">
             <nav className="crumbs">
-              <button className={`crumb ${!month ? 'crumb-active' : ''}`} onClick={() => navigate({ year, month: null })}>{year}</button>
-              {month && <><span className="crumb-sep">›</span><span className="crumb crumb-active">{MONTH_NAMES[Number(month.slice(5)) - 1]}</span></>}
+              <button className={`crumb ${!month ? 'crumb-active' : ''}`} onClick={() => navigate({ from, span, month: null })} title="Back to the overview">{month ? '‹ Overview' : windowLabel}</button>
+              {month && <><span className="crumb-sep">›</span><span className="crumb crumb-active">{monthLabel(month)}</span></>}
             </nav>
-            <button className="month-nav-btn" title={month ? 'Previous month' : 'Previous year'} onClick={goPrev}>‹</button>
-            <button className="month-nav-btn" title={month ? 'Next month' : 'Next year'} onClick={goNext}>›</button>
-            <button className="btn btn-ghost btn-sm" onClick={goToday}>Today</button>
+            <button className="month-nav-btn" title="Previous month" onClick={goPrev}>‹</button>
+            <button className="month-nav-btn" title="Next month" onClick={goNext}>›</button>
+            <button className="btn btn-ghost btn-sm" onClick={goToday} disabled={month ? month === nowYm : from === nowYm}>Today</button>
+            {!month && view === 'calendar' && (
+              <div className="view-toggle" style={{ marginLeft: 4 }}>
+                {SPANS.map(n => <button key={n} className={span === n ? 'active' : ''} onClick={() => navigate({ from, span: n, month: null })} title={`Show ${n} months`}>{n}M</button>)}
+              </div>
+            )}
             <span className="month-window-range">{scoped.length} items · {pct}% done</span>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -947,6 +1201,7 @@ export default function RoadmapPage() {
             <div className="view-toggle" style={{ marginLeft: 0 }}>
               <button className={view === 'calendar' ? 'active' : ''} onClick={() => setView('calendar')}>Calendar</button>
               <button className={view === 'list' ? 'active' : ''} onClick={() => setView('list')}>List</button>
+              <button className={view === 'backlog' ? 'active' : ''} onClick={() => setView('backlog')} title="Every item in every list — plan into months">Backlog</button>
             </div>
           </div>
         </div>
@@ -991,15 +1246,18 @@ export default function RoadmapPage() {
 
         {meta && view === 'calendar' && <Legend meta={meta} />}
 
-        {view === 'list'
+        {view === 'backlog' && meta
+          ? <BacklogView items={filtered} lists={meta.lists} onOpen={setSelectedId} onSchedule={scheduleTo} />
+          : view === 'list'
           ? <ListView items={scoped} onOpen={setSelectedId} onToggleDone={toggleDone} />
           : month
-            ? <MonthView monthKey={month} items={filtered} onUpdate={updateItem} onOpen={setSelectedId} onAdd={d => setAddDefaults(d)} canRoadmapDate={canRoadmapDate} />
-            : <YearView year={year} items={filtered} onOpenMonth={m => navigate({ year, month: m })} onOpenItem={setSelectedId} />}
+            ? <MonthView monthKey={month} items={filtered} lists={meta?.lists || []} onUpdate={updateItem} onOpen={setSelectedId} onAdd={d => setAddDefaults(d)} />
+            : <OverviewView months={windowMonths} items={filtered} onOpenMonth={m => navigate({ from, span, month: m })} onOpenItem={setSelectedId} />}
 
         {selected && meta && <Drawer item={selected} meta={meta} monthAround={monthAround} onUpdate={updateItem} onArchive={archiveItem} onClose={() => setSelectedId(null)} />}
         {addDefaults && meta && <AddModal meta={meta} defaults={addDefaults} monthAround={monthAround} saving={pending > 0} onAdd={addItem} onClose={() => setAddDefaults(null)} />}
       </div>
+    </ScheduleCtx.Provider>
     </ColorCtx.Provider>
   );
 }

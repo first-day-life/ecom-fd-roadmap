@@ -51,7 +51,17 @@ const env = {
 // HTTP
 // ---------------------------------------------------------------------------
 
+// The app must NEVER change a task's native ClickUp start/due dates. Every write goes
+// through cu(), so refuse any task payload that carries those fields.
+const PROTECTED_TASK_KEYS = ['start_date', 'due_date', 'start_date_time', 'due_date_time'];
+function assertNoNativeDates(path: string, method: string, body: unknown) {
+  if (method === 'GET' || !body || typeof body !== 'object' || !/^\/(task|list)\//.test(path)) return;
+  const hit = PROTECTED_TASK_KEYS.filter(k => k in (body as Record<string, unknown>));
+  if (hit.length) throw new Error(`Refusing to modify ClickUp native task dates (${hit.join(', ')}). The roadmap only writes Roadmap Start/End Date.`);
+}
+
 async function cu<T = any>(path: string, init: { method?: string; body?: unknown } = {}): Promise<T> {
+  assertNoNativeDates(path, init.method || 'GET', init.body);
   if (env.mock()) return mockFetch(path, init) as Promise<T>;
   const token = env.token();
   if (!token) throw new Error('CLICKUP_API_TOKEN environment variable is not set');
@@ -113,6 +123,8 @@ function toMember(u: any): Member {
 }
 
 async function resolveListIds(): Promise<string[]> {
+  // Mock mode always uses the built-in sample lists, whatever the real config says
+  if (env.mock()) return ['mock-site', 'mock-sprint', 'mock-ab', 'mock-ideas'];
   const explicit = env.listIds();
   if (explicit.length) return explicit;
   const folder = env.folderId();
@@ -120,7 +132,6 @@ async function resolveListIds(): Promise<string[]> {
     const res = await cu<{ lists: Array<{ id: string; archived?: boolean }> }>(`/folder/${folder}/list?archived=false`);
     return (res.lists || []).filter(l => !l.archived).map(l => String(l.id));
   }
-  if (env.mock()) return ['mock-site', 'mock-sprint', 'mock-ab', 'mock-ideas'];
   throw new Error('Set CLICKUP_FOLDER_ID (or CLICKUP_LIST_IDS) to choose which ClickUp lists make up the roadmap');
 }
 
@@ -388,8 +399,6 @@ export async function addInitiative(input: InitiativeInput & { name: string }, e
     custom_fields,
   };
   if (input.status && l.meta.statuses.some(s => s.name === input.status)) body.status = input.status;
-  if (input.startDate) { body.start_date = dateToMs(input.startDate); body.start_date_time = false; }
-  if (input.dueDate) { body.due_date = dateToMs(input.dueDate); body.due_date_time = false; }
 
   const created = await cu<any>(`/list/${l.meta.id}/task`, { method: 'POST', body });
   invalidate();
@@ -397,6 +406,9 @@ export async function addInitiative(input: InitiativeInput & { name: string }, e
 }
 
 export async function updateInitiative(id: string, input: InitiativeInput): Promise<Initiative> {
+  if ('startDate' in input || 'dueDate' in input) {
+    throw new Error('The roadmap never changes ClickUp start/due dates — use Roadmap Start/End Date.');
+  }
   const ctx = await getCtx();
   const current = await cu<any>(`/task/${id}`);
   const f = listCtx(ctx, String(current.list?.id)).fields;
@@ -406,8 +418,6 @@ export async function updateInitiative(id: string, input: InitiativeInput): Prom
   if (input.status !== undefined) body.status = input.status;
   if (input.priority !== undefined) body.priority = input.priority ? PRIORITY_TO_CU[input.priority] ?? null : null;
   if (input.notes !== undefined) body.markdown_content = input.notes;
-  if (input.startDate !== undefined) { body.start_date = dateToMs(input.startDate); body.start_date_time = false; }
-  if (input.dueDate !== undefined) { body.due_date = dateToMs(input.dueDate); body.due_date_time = false; }
   if (input.ownerId !== undefined) {
     const rem = (current.assignees || []).map((a: any) => Number(a.id)).filter((x: number) => x !== input.ownerId);
     body.assignees = { add: input.ownerId ? [input.ownerId] : [], rem };
