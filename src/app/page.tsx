@@ -1271,62 +1271,133 @@ function TestsView({ data }: { data: { configured: boolean; tests: LiveTest[]; e
 // Test learnings — tagged links, stored in the ClickUp "Test Learnings" list
 // ---------------------------------------------------------------------------
 
-interface Learning { id: string; title: string; link: string; tags: string[]; notes: string; addedBy: string; createdAt: string; clickupUrl: string }
-type LearningDraft = { title: string; link: string; tags: string[]; notes: string };
+interface LearningFields {
+  outcome: string; quarter: string; rollout: string;
+  pageType: string[]; lever: string[]; product: string[]; metric: string[];
+  dates: string; hypothesis: string; result: string; learning: string; nextSteps: string;
+  slide: string; intelligems: string; intelligemsResults: string;
+}
+interface Learning extends LearningFields { id: string; title: string; link: string; tags: string[]; notes: string; addedBy: string; createdAt: string; clickupUrl: string }
+type LearningDraft = { title: string } & LearningFields;
+type FilterKey = 'outcome' | 'pageType' | 'lever' | 'product' | 'metric' | 'quarter' | 'rollout';
+type LearningOptions = Record<FilterKey, string[]>;
 
-function TagInput({ value, onChange, suggestions }: { value: string[]; onChange: (v: string[]) => void; suggestions: string[] }) {
-  const [draft, setDraft] = useState('');
-  const add = (raw: string) => {
-    const parts = raw.split(',').map(s => s.trim().replace(/^#/, '').toLowerCase()).filter(Boolean);
-    if (parts.length) onChange([...value, ...parts.filter(p => !value.includes(p))]);
-    setDraft('');
+const FILTER_GROUPS: Array<{ key: FilterKey; label: string }> = [
+  { key: 'outcome', label: 'Outcome' }, { key: 'pageType', label: 'Page' }, { key: 'lever', label: 'Lever' },
+  { key: 'product', label: 'Product' }, { key: 'metric', label: 'Metric' }, { key: 'quarter', label: 'Quarter' }, { key: 'rollout', label: 'Rollout' },
+];
+const OUTCOME_ICON: Record<string, string> = { winner: '🏆', loser: '🛑', flat: '➖', mixed: '⚖️', inconclusive: '❔' };
+const valuesOf = (l: Learning, k: FilterKey): string[] => { const v = (l as any)[k]; return Array.isArray(v) ? v : v ? [v] : []; };
+
+/** Inline markdown → React: **bold**, *italic*, `code`, [text](url), bare URLs, and signed % lifts colored green/red. */
+function mdInline(text: string, keyBase = 'i'): React.ReactNode[] {
+  const out: React.ReactNode[] = [];
+  const re = /(\*\*([^*]+)\*\*)|(`([^`]+)`)|(\[([^\]]+)\]\((https?:\/\/[^\s)]+)\))|(https?:\/\/[^\s<>()]+[^\s<>().,;:!?'"])|((?:^|(?<=[\s(]))[+\-−–]\s?\$?\d[\d,]*(?:\.\d+)?\s?(?:%|pts|bps)?(?=[\s,.;:)]|$))|(\*([^*\s][^*]*?)\*)|(_([^_\s][^_]*?)_)/g;
+  let last = 0, m: RegExpExecArray | null, n = 0;
+  while ((m = re.exec(text))) {
+    if (m.index > last) out.push(text.slice(last, m.index));
+    const k = `${keyBase}-${n++}`;
+    if (m[1]) out.push(<strong key={k}>{mdInline(m[2], k)}</strong>);
+    else if (m[3]) out.push(<code key={k}>{m[4]}</code>);
+    else if (m[5]) out.push(<a key={k} href={m[7]} target="_blank" rel="noreferrer">{m[6]}</a>);
+    else if (m[8]) out.push(<a key={k} href={m[8]} target="_blank" rel="noreferrer">{(() => { try { const u = new URL(m[8]); return u.hostname.replace(/^www\./, '') + (u.pathname.length > 1 ? u.pathname.slice(0, 28) + (u.pathname.length > 28 ? '…' : '') : ''); } catch { return m[8]; } })()}</a>);
+    else if (m[9]) out.push(<span key={k} className={`md-lift ${/^[+\-−–]\s?\$?0*(?:\.0*)?\s?(?:%|pts|bps)?$/.test(m[9].trim()) ? 'zero' : m[9].trim().startsWith('+') ? 'pos' : 'neg'}`}>{m[9]}</span>);
+    else if (m[10]) out.push(<em key={k}>{m[11]}</em>);
+    else if (m[12]) out.push(<em key={k}>{m[13]}</em>);
+    last = re.lastIndex;
+  }
+  if (last < text.length) out.push(text.slice(last));
+  return out;
+}
+
+/** Block markdown: paragraphs, "- " / "* " / "1. " lists, "#" headings (shown bold). */
+function Md({ text, className }: { text: string; className?: string }) {
+  const lines = text.replace(/\r/g, '').split('\n');
+  const blocks: React.ReactNode[] = [];
+  let list: { ordered: boolean; items: string[] } | null = null;
+  const flush = () => {
+    if (!list) return;
+    const items = list.items.map((it, i) => <li key={i}>{mdInline(it, `l${blocks.length}-${i}`)}</li>);
+    blocks.push(list.ordered ? <ol key={blocks.length}>{items}</ol> : <ul key={blocks.length}>{items}</ul>);
+    list = null;
   };
-  const unused = suggestions.filter(s => !value.includes(s));
+  for (const raw of lines) {
+    const line = raw.trim();
+    const ul = line.match(/^[-*•]\s+(.*)$/), ol = line.match(/^\d+[.)]\s+(.*)$/);
+    if (ul || ol) {
+      const ordered = !!ol;
+      if (!list || list.ordered !== ordered) { flush(); list = { ordered, items: [] }; }
+      list.items.push((ul || ol)![1]);
+      continue;
+    }
+    flush();
+    if (!line) continue;
+    const h = line.match(/^#{1,6}\s+(.*)$/);
+    blocks.push(<p key={blocks.length} className={h ? 'md-h' : undefined}>{mdInline(h ? h[1] : line, `p${blocks.length}`)}</p>);
+  }
+  flush();
+  return <div className={`md ${className || ''}`}>{blocks}</div>;
+}
+
+const emptyDraft = (): LearningDraft => ({
+  title: '', outcome: '', quarter: '', rollout: '', pageType: [], lever: [], product: [], metric: [],
+  dates: '', hypothesis: '', result: '', learning: '', nextSteps: '', slide: '', intelligems: '', intelligemsResults: '',
+});
+
+function ChipPicker({ options, value, onChange }: { options: string[]; value: string[]; onChange: (v: string[]) => void }) {
+  if (!options.length) return <span className="res-dim">No options in ClickUp</span>;
   return (
-    <div className="tt-editor">
-      <div className="tt-chips">
-        {value.map(t => (
-          <span key={t} className="tt-tag">#{t}<button type="button" aria-label={`Remove ${t}`} onClick={() => onChange(value.filter(x => x !== t))}>×</button></span>
-        ))}
-        <input
-          className="tt-input" list="learn-tag-suggest" value={draft} placeholder={value.length ? 'Add tag…' : 'Tags — e.g. pdp, checkout, winner'}
-          onChange={e => (e.target.value.endsWith(',') ? add(e.target.value) : setDraft(e.target.value))}
-          onKeyDown={e => {
-            if (e.key === 'Enter') { e.preventDefault(); add(draft); }
-            else if (e.key === 'Backspace' && !draft && value.length) onChange(value.slice(0, -1));
-          }}
-          onBlur={() => draft.trim() && add(draft)}
-        />
-        <datalist id="learn-tag-suggest">{unused.map(s => <option key={s} value={s} />)}</datalist>
-      </div>
-      {unused.length > 0 && (
-        <div className="tt-quick">
-          {unused.slice(0, 12).map(s => <button key={s} type="button" className="tt-quick-btn" onClick={() => onChange([...value, s])}>+ {s}</button>)}
-        </div>
-      )}
+    <div className="pick-chips">
+      {options.map(o => (
+        <button key={o} type="button" className={`learn-tag sm ${value.includes(o) ? 'on' : ''}`} aria-pressed={value.includes(o)}
+          onClick={() => onChange(value.includes(o) ? value.filter(x => x !== o) : [...value, o])}>{o}</button>
+      ))}
     </div>
   );
 }
 
-function LearningForm({ initial, allTags, onSave, onCancel }: { initial: LearningDraft; allTags: string[]; onSave: (d: LearningDraft) => Promise<void>; onCancel: () => void }) {
+function LearningForm({ initial, options, onSave, onCancel }: { initial: LearningDraft; options: LearningOptions; onSave: (d: LearningDraft) => Promise<void>; onCancel: () => void }) {
   const [d, setD] = useState<LearningDraft>(initial);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
+  const set = (patch: Partial<LearningDraft>) => setD(cur => ({ ...cur, ...patch }));
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!d.title.trim()) { setErr('Add a title'); return; }
-    if (d.link && !/^https?:\/\//i.test(d.link.trim())) { setErr('Link must start with http:// or https://'); return; }
+    for (const k of ['slide', 'intelligems', 'intelligemsResults'] as const) if (d[k] && !/^https?:\/\//i.test(d[k].trim())) { setErr('Links must start with http:// or https://'); return; }
     setBusy(true); setErr('');
-    try { await onSave({ ...d, title: d.title.trim(), link: d.link.trim() }); } catch (x: any) { setErr(x.message || 'Save failed'); setBusy(false); }
+    try { await onSave({ ...d, title: d.title.trim() }); } catch (x: any) { setErr(x.message || 'Save failed'); setBusy(false); }
   };
+  const sel = (k: 'outcome' | 'quarter' | 'rollout', label: string) => (
+    <label>{label}
+      <select value={d[k]} onChange={e => set({ [k]: e.target.value } as any)}>
+        <option value="">—</option>
+        {options[k].map(o => <option key={o} value={o}>{o}</option>)}
+      </select>
+    </label>
+  );
   return (
     <form className="learn-form" onSubmit={submit}>
-      <div className="learn-form-grid">
-        <label>Title<input autoFocus value={d.title} onChange={e => setD({ ...d, title: e.target.value })} placeholder="What did we learn? e.g. Benefit bullets beat lifestyle image on PDP" /></label>
-        <label>Link<input type="url" value={d.link} onChange={e => setD({ ...d, link: e.target.value })} placeholder="https://… readout, Intelligems report, deck, doc" /></label>
+      <label>Title<input autoFocus value={d.title} onChange={e => set({ title: e.target.value })} placeholder="Outcome-first, e.g. Reviews on sale-page tiles: CVR +10%, RPV +12%" /></label>
+      <div className="learn-form-grid three">{sel('outcome', 'Outcome')}{sel('quarter', 'Quarter')}{sel('rollout', 'Rollout')}</div>
+      <div className="learn-form-grid three">
+        <label>Slide<input type="url" value={d.slide} onChange={e => set({ slide: e.target.value })} placeholder="https://docs.google.com/presentation/…#slide=id.…" /></label>
+        <label>Intelligems test<input type="url" value={d.intelligems} onChange={e => set({ intelligems: e.target.value })} placeholder="https://app.intelligems.io/…" /></label>
+        <label>Intelligems results<input type="url" value={d.intelligemsResults} onChange={e => set({ intelligemsResults: e.target.value })} placeholder="https://app.intelligems.io/…?tab=analytics" /></label>
       </div>
-      <label>Tags<TagInput value={d.tags} onChange={tags => setD({ ...d, tags })} suggestions={allTags} /></label>
-      <label>Notes <span className="res-dim">(optional)</span><textarea rows={2} value={d.notes} onChange={e => setD({ ...d, notes: e.target.value })} placeholder="Result, numbers, what we’d do next…" /></label>
+      <label>Page<ChipPicker options={options.pageType} value={d.pageType} onChange={v => set({ pageType: v })} /></label>
+      <label>Lever<ChipPicker options={options.lever} value={d.lever} onChange={v => set({ lever: v })} /></label>
+      <div className="learn-form-grid">
+        <label>Product<ChipPicker options={options.product} value={d.product} onChange={v => set({ product: v })} /></label>
+        <label>Metric<ChipPicker options={options.metric} value={d.metric} onChange={v => set({ metric: v })} /></label>
+      </div>
+      <label>Dates<input value={d.dates} onChange={e => set({ dates: e.target.value })} placeholder="e.g. 4/1 – 4/7/2026" /></label>
+      <label>Learning <span className="res-dim">(markdown ok)</span><textarea rows={2} value={d.learning} onChange={e => set({ learning: e.target.value })} placeholder="What we learned, in 1–2 sentences" /></label>
+      <div className="learn-form-grid">
+        <label>Hypothesis<textarea rows={3} value={d.hypothesis} onChange={e => set({ hypothesis: e.target.value })} /></label>
+        <label>Result<textarea rows={3} value={d.result} onChange={e => set({ result: e.target.value })} placeholder="Numbers as reported, e.g. CVR +10%, RPV +12%" /></label>
+      </div>
+      <label>Next steps<textarea rows={2} value={d.nextSteps} onChange={e => set({ nextSteps: e.target.value })} /></label>
       {err && <div className="learn-err">{err}</div>}
       <div className="learn-form-actions">
         <button type="button" className="btn btn-ghost btn-sm" onClick={onCancel} disabled={busy}>Cancel</button>
@@ -1337,13 +1408,16 @@ function LearningForm({ initial, allTags, onSave, onCancel }: { initial: Learnin
 }
 
 const hostOf = (u: string) => { try { return new URL(u).hostname.replace(/^www\./, ''); } catch { return ''; } };
+const NO_OPTIONS: LearningOptions = { outcome: [], pageType: [], lever: [], product: [], metric: [], quarter: [], rollout: [] };
 
 function LearningsView() {
   const [items, setItems] = useState<Learning[] | null>(null);
+  const [options, setOptions] = useState<LearningOptions>(NO_OPTIONS);
   const [error, setError] = useState('');
   const [q, setQ] = useState('');
-  const [sel, setSel] = useState<string[]>([]);
+  const [sel, setSel] = useState<Partial<Record<FilterKey, string[]>>>({});
   const [editing, setEditing] = useState<string | null>(null);   // 'new' | id | null
+  const [openIds, setOpenIds] = useState<Set<string>>(new Set());
 
   const load = useCallback(async () => {
     try {
@@ -1351,27 +1425,33 @@ function LearningsView() {
       const j = await r.json();
       if (j.error) setError(j.error);
       setItems(j.learnings || []);
+      if (j.options) setOptions(j.options);
     } catch (e: any) { setError(e.message); setItems([]); }
   }, []);
   useEffect(() => { load(); }, [load]);
 
-  const tagCounts = useMemo(() => {
-    const m = new Map<string, number>();
-    (items || []).forEach(l => l.tags.forEach(t => m.set(t, (m.get(t) || 0) + 1)));
-    return [...m.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
-  }, [items]);
-  const allTags = tagCounts.map(([t]) => t);
-
-  const shown = useMemo(() => {
+  const activeCount = Object.values(sel).reduce((n, v) => n + (v?.length || 0), 0);
+  const matchesSearch = (l: Learning) => {
     const words = q.toLowerCase().split(/\s+/).filter(Boolean);
-    return (items || []).filter(l => {
-      if (sel.length && !sel.every(t => l.tags.includes(t))) return false;
-      const hay = `${l.title} ${l.notes} ${l.link} ${l.tags.join(' ')}`.toLowerCase();
-      return words.every(w => hay.includes(w));
-    });
-  }, [items, q, sel]);
+    if (!words.length) return true;
+    const hay = [l.title, l.learning, l.result, l.hypothesis, l.nextSteps, l.dates, l.notes, ...FILTER_GROUPS.flatMap(g => valuesOf(l, g.key))].join(' ').toLowerCase();
+    return words.every(w => hay.includes(w));
+  };
+  const matchesFilters = (l: Learning, skip?: FilterKey) =>
+    FILTER_GROUPS.every(({ key }) => key === skip || !sel[key]?.length || valuesOf(l, key).some(v => sel[key]!.includes(v)));
 
-  const toggleTag = (t: string) => setSel(s => (s.includes(t) ? s.filter(x => x !== t) : [...s, t]));
+  const shown = useMemo(() => (items || []).filter(l => matchesSearch(l) && matchesFilters(l)), [items, q, sel]);   // eslint-disable-line react-hooks/exhaustive-deps
+
+  /** Counts per option, given every OTHER active filter (so counts show what clicking would give). */
+  const countsFor = (key: FilterKey) => {
+    const m = new Map<string, number>();
+    (items || []).filter(l => matchesSearch(l) && matchesFilters(l, key)).forEach(l => valuesOf(l, key).forEach(v => m.set(v, (m.get(v) || 0) + 1)));
+    return m;
+  };
+  const toggle = (key: FilterKey, v: string) => setSel(s => {
+    const cur = s[key] || [];
+    return { ...s, [key]: cur.includes(v) ? cur.filter(x => x !== v) : [...cur, v] };
+  });
 
   const save = async (d: LearningDraft, id?: string) => {
     const r = await fetch(id ? `/api/learnings/${id}` : '/api/learnings', { method: id ? 'PUT' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(d) });
@@ -1386,6 +1466,7 @@ function LearningsView() {
     if (!r.ok) { const j = await r.json().catch(() => ({})); window.alert(j.error || 'Could not remove'); return; }
     setItems(cur => (cur || []).filter(x => x.id !== l.id));
   };
+  const toggleOpen = (id: string) => setOpenIds(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
 
   if (!items) return <div className="loading-screen" style={{ minHeight: '30vh' }}><div className="spinner" /></div>;
 
@@ -1393,42 +1474,93 @@ function LearningsView() {
     <div className="learn-view">
       {error && <div className="error-banner"><span>⚠</span> {error}</div>}
       <div className="learn-toolbar">
-        <input className="learn-search" type="search" value={q} onChange={e => setQ(e.target.value)} placeholder={`Search ${items.length} learning${items.length === 1 ? '' : 's'}…`} />
+        <input className="learn-search" type="search" value={q} onChange={e => setQ(e.target.value)} placeholder={`Search ${items.length} learning${items.length === 1 ? '' : 's'} — title, learning, result, hypothesis…`} />
         {editing !== 'new' && <button className="btn btn-primary btn-sm" onClick={() => setEditing('new')}>＋ Add learning</button>}
       </div>
-      {tagCounts.length > 0 && (
-        <div className="learn-tags">
-          {tagCounts.map(([t, n]) => (
-            <button key={t} className={`learn-tag ${sel.includes(t) ? 'on' : ''}`} onClick={() => toggleTag(t)} aria-pressed={sel.includes(t)}>#{t} <span>{n}</span></button>
-          ))}
-          {(sel.length > 0 || q) && <button className="btn btn-ghost btn-sm" onClick={() => { setSel([]); setQ(''); }}>Clear</button>}
-        </div>
-      )}
-      {editing === 'new' && <LearningForm initial={{ title: '', link: '', tags: sel, notes: '' }} allTags={allTags} onSave={d => save(d)} onCancel={() => setEditing(null)} />}
-      {items.length === 0 && editing !== 'new' && <div className="empty-state">No learnings yet — add the first one.</div>}
-      {items.length > 0 && shown.length === 0 && <div className="empty-state">Nothing matches{sel.length ? ` #${sel.join(' #')}` : ''}{q ? ` “${q}”` : ''}.</div>}
-      <div className="learn-list">
-        {shown.map(l => editing === l.id ? (
-          <LearningForm key={l.id} initial={{ title: l.title, link: l.link, tags: l.tags, notes: l.notes }} allTags={allTags} onSave={d => save(d, l.id)} onCancel={() => setEditing(null)} />
-        ) : (
-          <div key={l.id} className="learn-card">
-            <div className="learn-main">
-              {l.link
-                ? <a className="learn-title" href={l.link} target="_blank" rel="noreferrer">{l.title} <span className="learn-host">{hostOf(l.link)} ↗</span></a>
-                : <span className="learn-title">{l.title}</span>}
-              {l.notes && <div className="learn-notes">{l.notes}</div>}
-              <div className="learn-meta">
-                {l.tags.map(t => <button key={t} className={`learn-tag sm ${sel.includes(t) ? 'on' : ''}`} onClick={() => toggleTag(t)}>#{t}</button>)}
-                <span className="res-dim">{l.createdAt ? shortDate(l.createdAt.slice(0, 10)) : ''}{l.addedBy ? ` · ${l.addedBy.split('@')[0]}` : ''}</span>
+
+      <div className="learn-filters">
+        {FILTER_GROUPS.map(({ key, label }) => {
+          const counts = countsFor(key);
+          const opts = options[key].length ? options[key] : Array.from(counts.keys()).sort();
+          const visible = opts.filter(o => counts.get(o) || sel[key]?.includes(o));
+          if (!visible.length) return null;
+          return (
+            <div key={key} className="learn-filter-row">
+              <span className="learn-filter-label">{label}</span>
+              <div className="learn-filter-chips">
+                {visible.map(o => (
+                  <button key={o} className={`learn-tag ${key === 'outcome' ? 'oc oc-' + o : ''} ${sel[key]?.includes(o) ? 'on' : ''}`} onClick={() => toggle(key, o)} aria-pressed={!!sel[key]?.includes(o)}>
+                    {key === 'outcome' && OUTCOME_ICON[o] ? OUTCOME_ICON[o] + ' ' : ''}{o} <span>{counts.get(o) || 0}</span>
+                  </button>
+                ))}
               </div>
             </div>
-            <div className="learn-actions">
-              <button className="icon-btn" title="Edit" onClick={() => setEditing(l.id)}>✎</button>
-              {l.clickupUrl && <a className="icon-btn" title="Open in ClickUp" href={l.clickupUrl} target="_blank" rel="noreferrer">↗</a>}
-              <button className="icon-btn" title="Remove (archives in ClickUp)" onClick={() => archive(l)}>🗑</button>
+          );
+        })}
+        {(activeCount > 0 || q) && (
+          <div className="learn-filter-row"><span className="learn-filter-label" /><button className="btn btn-ghost btn-sm" onClick={() => { setSel({}); setQ(''); }}>Clear filters{activeCount ? ` (${activeCount})` : ''}</button>
+            <span className="res-dim" style={{ fontSize: 12 }}>{shown.length} of {items.length}</span></div>
+        )}
+      </div>
+
+      {editing === 'new' && <LearningForm initial={emptyDraft()} options={options} onSave={d => save(d)} onCancel={() => setEditing(null)} />}
+      {items.length === 0 && editing !== 'new' && <div className="empty-state">No learnings yet — add the first one.</div>}
+      {items.length > 0 && shown.length === 0 && <div className="empty-state">Nothing matches these filters.</div>}
+
+      <div className="learn-list">
+        {shown.map(l => {
+          if (editing === l.id) {
+            const { id, link, tags, notes, addedBy, createdAt, clickupUrl, ...draft } = l;
+            return <LearningForm key={l.id} initial={draft} options={options} onSave={d => save(d, l.id)} onCancel={() => setEditing(null)} />;
+          }
+          const primary = l.slide || l.link || l.intelligemsResults || l.intelligems;
+          const isOpen = openIds.has(l.id);
+          const hasDetails = !!(l.hypothesis || l.result || l.nextSteps || l.notes);
+          const links = [
+            l.slide && { href: l.slide, label: '📊 Slide' },
+            l.intelligemsResults && { href: l.intelligemsResults, label: '📈 Intelligems results' },
+            l.intelligems && l.intelligems !== l.intelligemsResults && { href: l.intelligems, label: '🧪 Intelligems' },
+            l.link && l.link !== l.slide && { href: l.link, label: `🔗 ${hostOf(l.link) || 'Link'}` },
+          ].filter(Boolean) as Array<{ href: string; label: string }>;
+          return (
+            <div key={l.id} className={`learn-card oc-edge-${l.outcome || 'none'}`}>
+              <div className="learn-main">
+                <div className="learn-head">
+                  {l.outcome && <button className={`oc-badge oc-${l.outcome}`} onClick={() => toggle('outcome', l.outcome)} title="Filter by outcome">{OUTCOME_ICON[l.outcome] || ''} {l.outcome}</button>}
+                  {primary
+                    ? <a className="learn-title" href={primary} target="_blank" rel="noreferrer">{mdInline(l.title)}</a>
+                    : <span className="learn-title">{mdInline(l.title)}</span>}
+                </div>
+                {(l.learning || (!hasDetails && l.notes)) && <Md className="learn-learning" text={l.learning || l.notes} />}
+                <div className="learn-meta">
+                  {(['pageType', 'lever', 'product', 'metric'] as FilterKey[]).flatMap(k => valuesOf(l, k).map(v => (
+                    <button key={k + v} className={`learn-tag sm k-${k} ${sel[k]?.includes(v) ? 'on' : ''}`} onClick={() => toggle(k, v)}>{v}</button>
+                  )))}
+                  {l.quarter && <button className={`learn-tag sm k-quarter ${sel.quarter?.includes(l.quarter) ? 'on' : ''}`} onClick={() => toggle('quarter', l.quarter)}>{l.quarter}</button>}
+                  {l.rollout && <span className={`rollout-badge ${l.rollout}`}>{l.rollout === 'rolled-out' ? '✓ rolled out' : '✕ not rolled out'}</span>}
+                  {l.dates && <span className="res-dim">{l.dates}</span>}
+                </div>
+                {isOpen && (
+                  <div className="learn-details">
+                    {l.hypothesis && <div><h4>Hypothesis</h4><Md text={l.hypothesis} /></div>}
+                    {l.result && <div><h4>Result</h4><Md text={l.result} /></div>}
+                    {l.nextSteps && <div><h4>Next steps</h4><Md text={l.nextSteps} /></div>}
+                    {l.notes && l.learning && <div><h4>Notes</h4><Md text={l.notes} /></div>}
+                  </div>
+                )}
+                <div className="learn-links">
+                  {hasDetails && <button className="learn-more" onClick={() => toggleOpen(l.id)} aria-expanded={isOpen}>{isOpen ? 'Hide details ▴' : 'Hypothesis, result & next steps ▾'}</button>}
+                  {links.map(x => <a key={x.href + x.label} href={x.href} target="_blank" rel="noreferrer">{x.label}</a>)}
+                </div>
+              </div>
+              <div className="learn-actions">
+                <button className="icon-btn" title="Edit" onClick={() => setEditing(l.id)}>✎</button>
+                {l.clickupUrl && <a className="icon-btn" title="Open in ClickUp" href={l.clickupUrl} target="_blank" rel="noreferrer">↗</a>}
+                <button className="icon-btn" title="Remove (archives in ClickUp)" onClick={() => archive(l)}>🗑</button>
+              </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
     </div>
   );
