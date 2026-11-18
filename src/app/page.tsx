@@ -1091,17 +1091,35 @@ function ResultsBlock({ r }: { r: TestResults }) {
       {challengers.map(v => (
         <div key={v.name} className="res-variant">
           <table className="res-table">
-            <thead><tr><th>{challengers.length > 1 ? v.name : 'Variant vs control'}</th><th>Lift</th><th title="Chance the variant beats control">Chance to beat</th><th title="Reached 95%, or estimated days until it could">95%?</th></tr></thead>
+            <thead><tr>
+              <th>{challengers.length > 1 ? v.name : 'Metric'}</th>
+              <th>Lift</th>
+              <th title="How sure we are the variant is better (or worse) than control. 50% = no idea yet, 95% = significant.">Confidence (goal 95%)</th>
+              <th title="Reached 95%, or estimated days until it could if the current lift holds">To 95%</th>
+            </tr></thead>
             <tbody>
               {(['rpv', 'aov', 'cvr'] as const).map(k => {
                 const m = v.metrics[k];
                 if (!m) return null;
+                const dir = m.uplift == null ? 0 : m.uplift > 0.0005 ? 1 : m.uplift < -0.0005 ? -1 : 0;
+                // Confidence in the direction the data points: chance to beat (better) or 1 − chance to beat (worse)
+                const better = m.p2bc != null && m.p2bc >= 0.5;
+                const conf = m.p2bc == null ? null : better ? m.p2bc : 1 - m.p2bc;
+                const toward95 = conf == null ? 0 : Math.max(0, Math.min(1, (conf - 0.5) / 0.45));   // 50% → 0, 95% → full
+                const tone = conf == null ? 'flat' : conf < 0.6 ? 'flat' : better ? 'pos' : 'neg';
                 return (
                   <tr key={k} className={m.sig ? `sig-${m.sig}` : ''}>
-                    <td>{k.toUpperCase()}</td>
-                    <td>{fmtUp(m.uplift)}</td>
-                    <td>{fmtP(m.p2bc)}</td>
-                    <td className="res-nowrap">{m.sig === 'win' ? '✅ better' : m.sig === 'lose' ? '❌ worse' : m.daysToSig ? (m.daysToSig > 180 ? '>6 mo' : `~${m.daysToSig}d`) : '—'}</td>
+                    <td className="res-metric">{k.toUpperCase()}</td>
+                    <td><span className={`lift lift-${dir > 0 ? 'pos' : dir < 0 ? 'neg' : 'flat'} ${m.sig ? 'is-sig' : ''}`}>{dir > 0 ? '▲' : dir < 0 ? '▼' : '•'} {fmtUp(m.uplift)}</span></td>
+                    <td>
+                      {conf == null ? '—' : (
+                        <div className="conf" title={`Chance to beat control: ${fmtP(m.p2bc)}`}>
+                          <div className="conf-track"><div className={`conf-fill conf-${tone} ${m.sig ? 'is-sig' : ''}`} style={{ width: `${Math.round(toward95 * 100)}%` }} /><span className="conf-goal" /></div>
+                          <span className={`conf-label conf-${tone}`}>{(conf * 100).toFixed(conf > 0.99 ? 1 : 0)}% {tone === 'flat' ? 'no clear direction' : better ? 'sure it’s better' : 'sure it’s worse'}</span>
+                        </div>
+                      )}
+                    </td>
+                    <td className="res-nowrap">{m.sig === 'win' ? '✅ significant win' : m.sig === 'lose' ? '❌ significant loss' : m.daysToSig ? (m.daysToSig > 180 ? '>6 months' : `~${m.daysToSig} more day${m.daysToSig === 1 ? '' : 's'}`) : <span className="res-dim" title="Needs at least 7 days of data to estimate">too early</span>}</td>
                   </tr>
                 );
               })}
@@ -1201,7 +1219,7 @@ function TestsView({ data }: { data: { configured: boolean; tests: LiveTest[]; e
             {t.targets?.length > 0 && (
               <div className="test-targets">
                 <em>🎯 Targets</em>
-                {t.targets.slice(0, 6).map(x => <span key={x} className="test-var">{x.startsWith('~') ? `URL contains “${x.slice(1)}”` : x === '/' ? 'homepage (/)' : x}</span>)}
+                {t.targets.slice(0, 6).map(x => <span key={x} className="test-var">{targetsShort([x])}</span>)}
                 {t.targets.length > 6 && <span className="res-dim">+{t.targets.length - 6} more</span>}
               </div>
             )}

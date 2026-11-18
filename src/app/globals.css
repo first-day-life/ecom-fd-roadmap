@@ -844,3 +844,26 @@ a.learn-title:hover { color: var(--accent); }
 .bg-spinner { width: 12px; height: 12px; border-radius: 50%; border: 2px solid rgba(91, 91, 246, 0.2); border-top-color: var(--accent); animation: spin .8s linear infinite; }
 @keyframes bg-loading-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 @media (prefers-reduced-motion: reduce) { .bg-loading { animation: none; } .bg-spinner { animation-duration: 2s; } }
+
+/* Test results: colored lift + confidence toward 95% */
+.test-result { max-width: 900px; }
+.res-table td { vertical-align: middle; }
+.res-metric { font-weight: 700; color: #374151; width: 70px; }
+.lift { display: inline-block; min-width: 72px; text-align: center; border-radius: 6px; padding: 2px 8px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.lift-pos { background: #ecfdf5; color: #059669; }
+.lift-neg { background: #fef2f2; color: #dc2626; }
+.lift-flat { background: #f3f4f6; color: #6b7280; }
+.lift-pos.is-sig { background: #059669; color: #fff; }
+.lift-neg.is-sig { background: #dc2626; color: #fff; }
+.conf { display: flex; align-items: center; gap: 8px; min-width: 220px; }
+.conf-track { position: relative; flex: 0 0 110px; height: 6px; border-radius: 999px; background: rgba(15, 23, 42, 0.08); overflow: visible; }
+.conf-fill { height: 100%; border-radius: 999px; }
+.conf-fill.conf-pos { background: #6ee7b7; } .conf-fill.conf-pos.is-sig { background: #059669; }
+.conf-fill.conf-neg { background: #fca5a5; } .conf-fill.conf-neg.is-sig { background: #dc2626; }
+.conf-fill.conf-flat { background: #d1d5db; }
+.conf-goal { position: absolute; right: -1px; top: -3px; width: 2px; height: 12px; border-radius: 1px; background: #9ca3af; }
+.conf-label { font-size: 11.5px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.conf-label.conf-pos { color: #047857; } .conf-label.conf-neg { color: #b91c1c; } .conf-label.conf-flat { color: #6b7280; }
+.res-order-row { max-width: 640px; }
+.res-table tr.sig-win td, .res-table tr.sig-lose td { color: inherit; font-weight: inherit; }
+.res-table th { white-space: nowrap; }
