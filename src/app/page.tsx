@@ -1099,17 +1099,25 @@ function ResultsBlock({ r }: { r: TestResults }) {
   );
 }
 
-/** Age bands for a running test: fresh < 14d, maturing < 28d, long-running ≥ 28d. */
-function ageBand(t: LiveTest): 'fresh' | 'mid' | 'long' | 'over' {
-  const hi = t.estimatedDays?.high;
-  if (hi && t.daysRunning > hi) return 'over';
-  if (t.daysRunning >= 28) return 'long';
-  if (t.daysRunning >= 14) return 'mid';
-  return 'fresh';
+type VerdictKind = 'win' | 'lose' | 'call' | 'keep' | 'paused';
+/** What to do with a test now: keep it running, or make a call (and which way the data points). */
+function verdictOf(t: LiveTest): { kind: VerdictKind; icon: string; label: string } {
+  const r = t.results, d = t.daysRunning, hi = t.estimatedDays?.high;
+  if (r?.call === 'winner') return { kind: 'win', icon: '🏆', label: 'Call it — variant wins' };
+  if (r?.call === 'loser') return { kind: 'lose', icon: '🛑', label: 'Call it — control wins' };
+  if (r?.call === 'mixed') return { kind: 'call', icon: '⚖️', label: 'Make a call — mixed result' };
+  if (hi && d > hi) return { kind: 'call', icon: '⏰', label: 'Make a call — past est. length' };
+  if (d >= 28) return { kind: 'call', icon: '⏳', label: 'Make a call — 4+ weeks, no clear result' };
+  if (t.status === 'paused') return { kind: 'paused', icon: '⏸️', label: 'Paused' };
+  const left = r?.etaDays ?? (hi ? Math.max(0, hi - d) : null);
+  return { kind: 'keep', icon: '▶️', label: left ? `Keep running — ~${left > 180 ? '180+' : left} days to go` : 'Keep running' };
 }
+
+const daysText = (d: number) => (d === 0 ? 'Started today' : `${d} day${d === 1 ? '' : 's'}`);
 
 function TestsView({ data }: { data: { configured: boolean; tests: LiveTest[]; error?: string } | null }) {
   const conflicts = useConflicts();
+  const [open, setOpen] = useState<Set<string>>(new Set());
 
   if (!data) return <div className="loading-screen" style={{ minHeight: '30vh' }}><div className="spinner" /></div>;
   if (!data.configured) {
@@ -1125,52 +1133,59 @@ function TestsView({ data }: { data: { configured: boolean; tests: LiveTest[]; e
   const live = data.tests.filter(t => t.status === 'started');
   const paused = data.tests.filter(t => t.status === 'paused');
   const avg = live.length ? Math.round(live.reduce((n, t) => n + t.daysRunning, 0) / live.length) : 0;
-  const longest = live[0];
+  const needCall = data.tests.filter(t => ['win', 'lose', 'call'].includes(verdictOf(t).kind)).length;
+  const allOpen = data.tests.length > 0 && data.tests.every(t => open.has(t.id));
+  const toggle = (id: string) => setOpen(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
 
-  const Card = ({ t }: { t: LiveTest }) => {
-    const band = ageBand(t);
+  const renderCard = (t: LiveTest) => {
+    const v = verdictOf(t);
     const est = t.estimatedDays;
     const pct = est?.high ? Math.min(100, Math.round((t.daysRunning / est.high) * 100)) : null;
+    const overlaps = conflicts.get('ig:' + t.id) || [];
+    const isOpen = open.has(t.id);
     return (
-      <div className={`test-card band-${band} ${t.status === 'paused' ? 'test-paused' : ''}`}>
-        <div className="test-days">
-          <strong>{t.daysRunning}</strong>
-          <span>day{t.daysRunning === 1 ? '' : 's'}{t.status === 'paused' ? ' (paused)' : ' running'}</span>
-        </div>
-        <div className="test-main">
-          <div className="test-name" title={t.name}>{t.name}</div>
-          <div className="test-meta">
-            <span className="test-type">{t.typeLabel}</span>
-            <span>Started {new Date(t.startedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</span>
-            {t.pausedAt && <span>· Paused {new Date(t.pausedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</span>}
-            {band === 'over' && <span className="test-flag">⏰ Past estimated length</span>}
-            {band === 'long' && <span className="test-flag">⏳ 4+ weeks — time to call it?</span>}
-            {t.url && <a className="test-link" href={t.url} target="_blank" rel="noreferrer">Open in Intelligems ↗</a>}
+      <div key={t.id} className={`tcard v-${v.kind} ${isOpen ? 'is-open' : ''}`}>
+        <button className="tcard-row" onClick={() => toggle(t.id)} aria-expanded={isOpen}>
+          <span className={`tcard-status ${t.status}`}>{t.status === 'paused' ? 'Paused' : 'Live'}</span>
+          <span className="tcard-name" title={t.name}>{t.name}</span>
+          {overlaps.length > 0 && <span className="conflict-badge" title="Overlaps another test — expand for details">⚠️ {overlaps.length}</span>}
+          <span className={`tcard-verdict v-${v.kind}`}>{v.icon} {v.label}</span>
+          <span className="tcard-days">{daysText(t.daysRunning)}{est?.high ? <span className="res-dim"> / ~{est.high}</span> : null}</span>
+          <span className="tcard-chev" aria-hidden>▾</span>
+        </button>
+        {isOpen && (
+          <div className="tcard-body">
+            <div className="test-meta">
+              <span className="test-type">{t.typeLabel}</span>
+              <span>Started {new Date(t.startedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</span>
+              {t.pausedAt && <span>· Paused {new Date(t.pausedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</span>}
+              {t.url && <a className="test-link" href={t.url} target="_blank" rel="noreferrer">Open in Intelligems ↗</a>}
+            </div>
+            {est && (est.low || est.high) && (
+              <div className="test-est">
+                <div className="progress-bar-bg"><div className="progress-bar-fill" style={{ width: (pct ?? 0) + '%', background: est.high && t.daysRunning > est.high ? '#ef4444' : undefined }} /></div>
+                <span>Estimated length {est.low ?? '?'}–{est.high ?? '?'} days</span>
+              </div>
+            )}
+            <div className="test-vars">
+              {t.variations.map(x => <span key={x.name} className={`test-var ${x.isControl ? 'is-control' : ''}`}>{x.isControl ? '🅰️' : '🅱️'} {x.name} · {x.percentage}%</span>)}
+            </div>
+            {t.targets?.length > 0 && (
+              <div className="test-targets">
+                <em>🎯 Targets</em>
+                {t.targets.slice(0, 6).map(x => <span key={x} className="test-var">{x.startsWith('~') ? `URL contains “${x.slice(1)}”` : x === '/' ? 'homepage (/)' : x}</span>)}
+                {t.targets.length > 6 && <span className="res-dim">+{t.targets.length - 6} more</span>}
+              </div>
+            )}
+            {overlaps.length > 0 && (
+              <div className="conflict-banner">
+                <strong>⚠️ Overlaps</strong>
+                <ul>{overlaps.map(c => <li key={c.other.id}>{c.other.kind === 'intelligems' ? 'Live test' : `Planned in ${c.other.where}`}: “{c.other.name}” on {c.shared.join(', ')} ({shortDate(c.from)} – {shortDate(c.to)})</li>)}</ul>
+              </div>
+            )}
+            {t.results && <ResultsBlock r={t.results} />}
           </div>
-          {est && (est.low || est.high) && (
-            <div className="test-est">
-              <div className="progress-bar-bg"><div className="progress-bar-fill" style={{ width: (pct ?? 0) + '%', background: band === 'over' ? '#ef4444' : undefined }} /></div>
-              <span>Estimated length {est.low ?? '?'}–{est.high ?? '?'} days</span>
-            </div>
-          )}
-          <div className="test-vars">
-            {t.variations.map(v => <span key={v.name} className={`test-var ${v.isControl ? 'is-control' : ''}`}>{v.isControl ? '🅰️' : '🅱️'} {v.name} · {v.percentage}%</span>)}
-          </div>
-          {t.targets?.length > 0 && (
-            <div className="test-targets">
-              <em>🎯 Targets</em>
-              {t.targets.slice(0, 6).map(x => <span key={x} className="test-var">{x.startsWith('~') ? `URL contains “${x.slice(1)}”` : x === '/' ? 'homepage (/)' : x}</span>)}
-              {t.targets.length > 6 && <span className="res-dim">+{t.targets.length - 6} more</span>}
-            </div>
-          )}
-          {(conflicts.get('ig:' + t.id) || []).length > 0 && (
-            <div className="conflict-banner">
-              <strong>⚠️ Overlaps</strong>
-              <ul>{conflicts.get('ig:' + t.id)!.map(c => <li key={c.other.id}>{c.other.kind === 'intelligems' ? 'Live test' : `Planned in ${c.other.where}`}: “{c.other.name}” on {c.shared.join(', ')} ({shortDate(c.from)} – {shortDate(c.to)})</li>)}</ul>
-            </div>
-          )}
-          {t.results && <ResultsBlock r={t.results} />}
-        </div>
+        )}
       </div>
     );
   };
@@ -1179,20 +1194,27 @@ function TestsView({ data }: { data: { configured: boolean; tests: LiveTest[]; e
     <div className="tests-view">
       <div className="side-stats tests-stats">
         <div><strong>{live.length}</strong><span>live tests</span></div>
+        <div><strong>{needCall}</strong><span>need a call</span></div>
         <div><strong>{avg}</strong><span>avg days running</span></div>
-        <div><strong>{longest ? longest.daysRunning : 0}</strong><span>longest (days)</span></div>
-        <div><strong>{live.filter(t => t.results && ['winner', 'loser', 'mixed'].includes(t.results.call)).length}</strong><span>ready to call</span></div>
+        <div><strong>{live.length ? Math.max(...live.map(t => t.daysRunning)) : 0}</strong><span>longest (days)</span></div>
         <div><strong>{paused.length}</strong><span>paused</span></div>
       </div>
-      <p className="month-only-hint" style={{ margin: '0 0 12px' }}>
-        Live A/B tests from Intelligems, longest-running first. A test can be called when a variant has 300+ orders and RPV, AOV or CVR is at 95% (≥95% or ≤5% chance to beat control). Day estimates assume the current trend holds. 🟢 &lt;2 weeks · 🟡 2–4 weeks · 🟠 4+ weeks · 🔴 past estimated length. Read-only; refreshes every 5 minutes.
-      </p>
+      <div className="tests-toolbar">
+        <p className="month-only-hint">
+          Click a test for details. A test can be called when a variant has 300+ orders and RPV, AOV or CVR is at 95% confidence. Read-only; refreshes every 5 minutes.
+        </p>
+        {data.tests.length > 0 && (
+          <button className="btn btn-ghost btn-sm" onClick={() => setOpen(allOpen ? new Set() : new Set(data.tests.map(t => t.id)))}>
+            {allOpen ? 'Collapse all' : 'Expand all'}
+          </button>
+        )}
+      </div>
       {live.length === 0 && <div className="empty-state">No live tests right now.</div>}
-      <div className="tests-grid">{live.map(t => <Card key={t.id} t={t} />)}</div>
+      <div className="tests-list">{live.map(renderCard)}</div>
       {paused.length > 0 && (
         <>
           <div className="form-section-label" style={{ marginTop: 20 }}>⏸️ Paused</div>
-          <div className="tests-grid">{paused.map(t => <Card key={t.id} t={t} />)}</div>
+          <div className="tests-list">{paused.map(renderCard)}</div>
         </>
       )}
     </div>
