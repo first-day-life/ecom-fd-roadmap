@@ -1222,6 +1222,198 @@ function TestsView({ data }: { data: { configured: boolean; tests: LiveTest[]; e
 }
 
 // ---------------------------------------------------------------------------
+// Test learnings — tagged links, stored in the ClickUp "Test Learnings" list
+// ---------------------------------------------------------------------------
+
+interface Learning { id: string; title: string; link: string; tags: string[]; notes: string; addedBy: string; createdAt: string; clickupUrl: string }
+type LearningDraft = { title: string; link: string; tags: string[]; notes: string };
+
+function TagInput({ value, onChange, suggestions }: { value: string[]; onChange: (v: string[]) => void; suggestions: string[] }) {
+  const [draft, setDraft] = useState('');
+  const add = (raw: string) => {
+    const parts = raw.split(',').map(s => s.trim().replace(/^#/, '').toLowerCase()).filter(Boolean);
+    if (parts.length) onChange([...value, ...parts.filter(p => !value.includes(p))]);
+    setDraft('');
+  };
+  const unused = suggestions.filter(s => !value.includes(s));
+  return (
+    <div className="tt-editor">
+      <div className="tt-chips">
+        {value.map(t => (
+          <span key={t} className="tt-tag">#{t}<button type="button" aria-label={`Remove ${t}`} onClick={() => onChange(value.filter(x => x !== t))}>×</button></span>
+        ))}
+        <input
+          className="tt-input" list="learn-tag-suggest" value={draft} placeholder={value.length ? 'Add tag…' : 'Tags — e.g. pdp, checkout, winner'}
+          onChange={e => (e.target.value.endsWith(',') ? add(e.target.value) : setDraft(e.target.value))}
+          onKeyDown={e => {
+            if (e.key === 'Enter') { e.preventDefault(); add(draft); }
+            else if (e.key === 'Backspace' && !draft && value.length) onChange(value.slice(0, -1));
+          }}
+          onBlur={() => draft.trim() && add(draft)}
+        />
+        <datalist id="learn-tag-suggest">{unused.map(s => <option key={s} value={s} />)}</datalist>
+      </div>
+      {unused.length > 0 && (
+        <div className="tt-quick">
+          {unused.slice(0, 12).map(s => <button key={s} type="button" className="tt-quick-btn" onClick={() => onChange([...value, s])}>+ {s}</button>)}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function LearningForm({ initial, allTags, onSave, onCancel }: { initial: LearningDraft; allTags: string[]; onSave: (d: LearningDraft) => Promise<void>; onCancel: () => void }) {
+  const [d, setD] = useState<LearningDraft>(initial);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!d.title.trim()) { setErr('Add a title'); return; }
+    if (d.link && !/^https?:\/\//i.test(d.link.trim())) { setErr('Link must start with http:// or https://'); return; }
+    setBusy(true); setErr('');
+    try { await onSave({ ...d, title: d.title.trim(), link: d.link.trim() }); } catch (x: any) { setErr(x.message || 'Save failed'); setBusy(false); }
+  };
+  return (
+    <form className="learn-form" onSubmit={submit}>
+      <div className="learn-form-grid">
+        <label>Title<input autoFocus value={d.title} onChange={e => setD({ ...d, title: e.target.value })} placeholder="What did we learn? e.g. Benefit bullets beat lifestyle image on PDP" /></label>
+        <label>Link<input type="url" value={d.link} onChange={e => setD({ ...d, link: e.target.value })} placeholder="https://… readout, Intelligems report, deck, doc" /></label>
+      </div>
+      <label>Tags<TagInput value={d.tags} onChange={tags => setD({ ...d, tags })} suggestions={allTags} /></label>
+      <label>Notes <span className="res-dim">(optional)</span><textarea rows={2} value={d.notes} onChange={e => setD({ ...d, notes: e.target.value })} placeholder="Result, numbers, what we’d do next…" /></label>
+      {err && <div className="learn-err">{err}</div>}
+      <div className="learn-form-actions">
+        <button type="button" className="btn btn-ghost btn-sm" onClick={onCancel} disabled={busy}>Cancel</button>
+        <button type="submit" className="btn btn-primary btn-sm" disabled={busy}>{busy ? 'Saving…' : 'Save learning'}</button>
+      </div>
+    </form>
+  );
+}
+
+const hostOf = (u: string) => { try { return new URL(u).hostname.replace(/^www\./, ''); } catch { return ''; } };
+
+function LearningsView() {
+  const [items, setItems] = useState<Learning[] | null>(null);
+  const [error, setError] = useState('');
+  const [q, setQ] = useState('');
+  const [sel, setSel] = useState<string[]>([]);
+  const [editing, setEditing] = useState<string | null>(null);   // 'new' | id | null
+
+  const load = useCallback(async () => {
+    try {
+      const r = await fetch('/api/learnings', { cache: 'no-store' });
+      const j = await r.json();
+      if (j.error) setError(j.error);
+      setItems(j.learnings || []);
+    } catch (e: any) { setError(e.message); setItems([]); }
+  }, []);
+  useEffect(() => { load(); }, [load]);
+
+  const tagCounts = useMemo(() => {
+    const m = new Map<string, number>();
+    (items || []).forEach(l => l.tags.forEach(t => m.set(t, (m.get(t) || 0) + 1)));
+    return [...m.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+  }, [items]);
+  const allTags = tagCounts.map(([t]) => t);
+
+  const shown = useMemo(() => {
+    const words = q.toLowerCase().split(/\s+/).filter(Boolean);
+    return (items || []).filter(l => {
+      if (sel.length && !sel.every(t => l.tags.includes(t))) return false;
+      const hay = `${l.title} ${l.notes} ${l.link} ${l.tags.join(' ')}`.toLowerCase();
+      return words.every(w => hay.includes(w));
+    });
+  }, [items, q, sel]);
+
+  const toggleTag = (t: string) => setSel(s => (s.includes(t) ? s.filter(x => x !== t) : [...s, t]));
+
+  const save = async (d: LearningDraft, id?: string) => {
+    const r = await fetch(id ? `/api/learnings/${id}` : '/api/learnings', { method: id ? 'PUT' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(d) });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || 'Save failed');
+    setItems(cur => (id ? (cur || []).map(x => (x.id === id ? j : x)) : [j, ...(cur || [])]));
+    setEditing(null);
+  };
+  const archive = async (l: Learning) => {
+    if (!window.confirm(`Remove “${l.title}”? It’s archived in ClickUp and can be restored there.`)) return;
+    const r = await fetch(`/api/learnings/${l.id}`, { method: 'DELETE' });
+    if (!r.ok) { const j = await r.json().catch(() => ({})); window.alert(j.error || 'Could not remove'); return; }
+    setItems(cur => (cur || []).filter(x => x.id !== l.id));
+  };
+
+  if (!items) return <div className="loading-screen" style={{ minHeight: '30vh' }}><div className="spinner" /></div>;
+
+  return (
+    <div className="learn-view">
+      {error && <div className="error-banner"><span>⚠</span> {error}</div>}
+      <div className="learn-toolbar">
+        <input className="learn-search" type="search" value={q} onChange={e => setQ(e.target.value)} placeholder={`Search ${items.length} learning${items.length === 1 ? '' : 's'}…`} />
+        {editing !== 'new' && <button className="btn btn-primary btn-sm" onClick={() => setEditing('new')}>＋ Add learning</button>}
+      </div>
+      {tagCounts.length > 0 && (
+        <div className="learn-tags">
+          {tagCounts.map(([t, n]) => (
+            <button key={t} className={`learn-tag ${sel.includes(t) ? 'on' : ''}`} onClick={() => toggleTag(t)} aria-pressed={sel.includes(t)}>#{t} <span>{n}</span></button>
+          ))}
+          {(sel.length > 0 || q) && <button className="btn btn-ghost btn-sm" onClick={() => { setSel([]); setQ(''); }}>Clear</button>}
+        </div>
+      )}
+      {editing === 'new' && <LearningForm initial={{ title: '', link: '', tags: sel, notes: '' }} allTags={allTags} onSave={d => save(d)} onCancel={() => setEditing(null)} />}
+      {items.length === 0 && editing !== 'new' && <div className="empty-state">No learnings yet — add the first one.</div>}
+      {items.length > 0 && shown.length === 0 && <div className="empty-state">Nothing matches{sel.length ? ` #${sel.join(' #')}` : ''}{q ? ` “${q}”` : ''}.</div>}
+      <div className="learn-list">
+        {shown.map(l => editing === l.id ? (
+          <LearningForm key={l.id} initial={{ title: l.title, link: l.link, tags: l.tags, notes: l.notes }} allTags={allTags} onSave={d => save(d, l.id)} onCancel={() => setEditing(null)} />
+        ) : (
+          <div key={l.id} className="learn-card">
+            <div className="learn-main">
+              {l.link
+                ? <a className="learn-title" href={l.link} target="_blank" rel="noreferrer">{l.title} <span className="learn-host">{hostOf(l.link)} ↗</span></a>
+                : <span className="learn-title">{l.title}</span>}
+              {l.notes && <div className="learn-notes">{l.notes}</div>}
+              <div className="learn-meta">
+                {l.tags.map(t => <button key={t} className={`learn-tag sm ${sel.includes(t) ? 'on' : ''}`} onClick={() => toggleTag(t)}>#{t}</button>)}
+                <span className="res-dim">{l.createdAt ? shortDate(l.createdAt.slice(0, 10)) : ''}{l.addedBy ? ` · ${l.addedBy.split('@')[0]}` : ''}</span>
+              </div>
+            </div>
+            <div className="learn-actions">
+              <button className="icon-btn" title="Edit" onClick={() => setEditing(l.id)}>✎</button>
+              {l.clickupUrl && <a className="icon-btn" title="Open in ClickUp" href={l.clickupUrl} target="_blank" rel="noreferrer">↗</a>}
+              <button className="icon-btn" title="Remove (archives in ClickUp)" onClick={() => archive(l)}>🗑</button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/** Tests tab: live Intelligems tests, or the learnings repository. */
+function TestsPage({ data }: { data: { configured: boolean; tests: LiveTest[]; error?: string } | null }) {
+  const [sub, setSub] = useState<'running' | 'learnings'>('running');
+  useEffect(() => { if (new URLSearchParams(window.location.search).get('tab') === 'learnings') setSub('learnings'); }, []);
+  const choose = (s: 'running' | 'learnings') => {
+    setSub(s);
+    const q = new URLSearchParams(window.location.search);
+    if (s === 'learnings') q.set('tab', 'learnings'); else q.delete('tab');
+    window.history.replaceState(null, '', window.location.pathname + '?' + q.toString());
+  };
+  const liveCount = data?.tests.filter(t => t.status === 'started').length;
+  return (
+    <div>
+      <div className="tests-head">
+        <h2>{sub === 'running' ? 'Running tests' : 'Test learnings'}</h2>
+        <div className="seg" role="tablist">
+          <button role="tab" aria-selected={sub === 'running'} className={sub === 'running' ? 'on' : ''} onClick={() => choose('running')}>🧪 Running{liveCount ? ` (${liveCount})` : ''}</button>
+          <button role="tab" aria-selected={sub === 'learnings'} className={sub === 'learnings' ? 'on' : ''} onClick={() => choose('learnings')}>📚 Learnings</button>
+        </div>
+      </div>
+      {sub === 'running' ? <TestsView data={data} /> : <LearningsView />}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // List view
 // ---------------------------------------------------------------------------
 
@@ -1916,7 +2108,7 @@ export default function RoadmapPage() {
         {meta && view === 'calendar' && <Legend meta={meta} />}
 
         {view === 'tests'
-          ? <TestsView data={tests} />
+          ? <TestsPage data={tests} />
           : view === 'backlog' && meta
           ? <BacklogView items={filtered} meta={meta} onOpen={setSelectedId} onSchedule={scheduleTo} onUpdate={updateItem} onOpenMonth={m => { setViewState('calendar'); navigate({ from, span, month: m }); }} />
           : view === 'list'

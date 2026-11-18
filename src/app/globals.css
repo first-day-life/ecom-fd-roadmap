@@ -832,3 +832,51 @@ body {
   .tcard-days { min-width: 0; margin-left: auto; }
   .tests-toolbar { flex-direction: column; align-items: flex-start; }
 }
+
+/* Tests header: Running | Learnings switch */
+.tests-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 4px 0 12px; }
+.tests-head h2 { font-size: 18px; font-weight: 700; color: #111827; letter-spacing: -0.2px; }
+.seg { display: inline-flex; gap: 2px; padding: 3px; border-radius: 999px; background: rgba(255,255,255,.55); border: 1px solid var(--glass-border); -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur); }
+.seg button { border: none; background: transparent; font: inherit; font-size: 13px; font-weight: 600; color: #4b5563; padding: 6px 14px; border-radius: 999px; cursor: pointer; }
+.seg button.on { background: #fff; color: #111827; box-shadow: 0 1px 3px rgba(15,23,42,.1); }
+
+/* Learnings repository */
+.learn-view { display: flex; flex-direction: column; gap: 10px; }
+.learn-toolbar { display: flex; gap: 10px; align-items: center; }
+.learn-search { flex: 1; padding: 9px 14px; border-radius: 12px; border: 1px solid var(--glass-border); background: rgba(255,255,255,.75); font: inherit; font-size: 14px; }
+.learn-search:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(91,91,246,.15); }
+.learn-tags { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.learn-tag { border: 1px solid rgba(139,92,246,.25); background: rgba(243,239,254,.8); color: #5b21b6; border-radius: 999px; padding: 3px 10px; font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; }
+.learn-tag span { color: #8b5cf6; font-weight: 500; margin-left: 2px; }
+.learn-tag:hover { background: #ede9fe; }
+.learn-tag.on { background: #7c3aed; border-color: #7c3aed; color: #fff; }
+.learn-tag.on span { color: #ddd6fe; }
+.learn-tag.sm { font-size: 11px; padding: 1px 8px; }
+.learn-list { display: flex; flex-direction: column; gap: 8px; }
+.learn-card, .learn-form {
+  background: var(--glass); -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur);
+  border: 1px solid var(--glass-border); border-radius: 14px; box-shadow: var(--glass-shadow);
+}
+.learn-card { display: flex; gap: 12px; padding: 12px 14px; align-items: flex-start; }
+.learn-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.learn-title { font-size: 14px; font-weight: 650; color: #111827; text-decoration: none; }
+a.learn-title:hover { color: var(--accent); }
+.learn-host { font-size: 11px; font-weight: 500; color: #9ca3af; margin-left: 4px; }
+.learn-notes { font-size: 12.5px; color: #4b5563; line-height: 1.5; white-space: pre-wrap; }
+.learn-meta { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; font-size: 11px; }
+.learn-actions { display: flex; gap: 2px; flex: none; opacity: .45; transition: opacity .15s; }
+.learn-card:hover .learn-actions, .learn-actions:focus-within { opacity: 1; }
+.icon-btn { border: none; background: transparent; cursor: pointer; font-size: 14px; color: #4b5563; width: 28px; height: 28px; border-radius: 8px; display: inline-flex; align-items: center; justify-content: center; text-decoration: none; }
+.icon-btn:hover { background: rgba(15,23,42,.06); }
+.learn-form { padding: 14px; display: flex; flex-direction: column; gap: 10px; border-color: rgba(91,91,246,.35); }
+.learn-form label { display: flex; flex-direction: column; gap: 4px; font-size: 11px; font-weight: 700; color: #6b7280; text-transform: uppercase; letter-spacing: .4px; }
+.learn-form input:not(.tt-input), .learn-form textarea { font: inherit; font-size: 13px; text-transform: none; letter-spacing: 0; font-weight: 400; color: #111827; padding: 8px 10px; border: 1px solid #e5e7eb; border-radius: 8px; background: #fff; }
+.learn-form .tt-input { text-transform: none; letter-spacing: 0; font-weight: 400; }
+.learn-form-grid { display: grid; grid-template-columns: 1.4fr 1fr; gap: 10px; }
+.learn-form-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.learn-err { color: #b91c1c; font-size: 12px; }
+@media (max-width: 760px) {
+  .learn-form-grid { grid-template-columns: 1fr; }
+  .tests-head h2 { font-size: 16px; }
+  .learn-actions { opacity: 1; }
+}

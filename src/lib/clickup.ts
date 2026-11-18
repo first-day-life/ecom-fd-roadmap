@@ -61,7 +61,7 @@ function assertNoNativeDates(path: string, method: string, body: unknown) {
   if (hit.length) throw new Error(`Refusing to modify ClickUp native task dates (${hit.join(', ')}). The roadmap only writes Roadmap Start/End Date.`);
 }
 
-async function cu<T = any>(path: string, init: { method?: string; body?: unknown } = {}): Promise<T> {
+export async function cu<T = any>(path: string, init: { method?: string; body?: unknown } = {}): Promise<T> {
   assertNoNativeDates(path, init.method || 'GET', init.body);
   if (env.mock()) return mockFetch(path, init) as Promise<T>;
   const token = env.token();
