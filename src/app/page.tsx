@@ -332,7 +332,6 @@ function MoreMenu({ onExport }: { onExport: () => void }) {
         <div className="more-pop" role="menu" onClick={() => setOpen(false)}>
           <Link href="/requests" role="menuitem">📨 Review requests</Link>
           <Link href="/request" role="menuitem">✍️ Submit a request</Link>
-          <Link href="/accomplishments" role="menuitem">🏆 Accomplishments</Link>
           <button role="menuitem" onClick={onExport}>⬇️ Export CSV</button>
           <div className="more-sep" />
           <Link href="/config" role="menuitem">⚙️ Settings &amp; connection</Link>

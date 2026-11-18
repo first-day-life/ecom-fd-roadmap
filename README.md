@@ -8,7 +8,6 @@ A roadmap board that reads and writes **ClickUp** directly. It starts at the yea
 |---|---|
 | Roadmap items | Every list in a ClickUp folder (`CLICKUP_FOLDER_ID`), e.g. *Ecommerce 26-27*: Site Backlog, Current Sprint, AB Test Backlog, Idea Parking Lot |
 | Requests | ClickUp tasks tagged `roadmap-request` (created in `CLICKUP_REQUEST_LIST_ID`). Approve = remove the tag. Reject = archive. |
-| Accomplishments | Still a Google Sheet (unchanged) |
 
 ### How a task lands on the calendar
 
