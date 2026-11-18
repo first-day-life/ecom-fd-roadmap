@@ -826,3 +826,9 @@ a.learn-title:hover { color: var(--accent); }
   .tests-head h2 { font-size: 16px; }
   .learn-actions { opacity: 1; }
 }
+
+/* Month view: show each bar's test targeting under its name */
+.week-grid, .gantt-body { grid-auto-rows: minmax(34px, auto); }
+.bar-text { display: flex; flex-direction: column; min-width: 0; flex: 1 1 auto; line-height: 1.2; padding: 4px 0; }
+.bar-targets { font-size: 10.5px; font-weight: 600; color: #6d28d9; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bar-live .bar-targets { color: #991b1b; }

@@ -137,6 +137,16 @@ function targetLabel(path: string): string {
   return path;
 }
 
+/** Short, readable names for a bar's targets: URLs and paths become "PDP: x", "LP: y", … */
+function targetsShort(raw: string[]): string {
+  const out = raw.map(t => {
+    if (t.startsWith('~')) return `URL has “${t.slice(1)}”`;
+    if (/^https?:\/\//i.test(t)) { try { return targetLabel(new URL(t).pathname.replace(/\/$/, '') || '/'); } catch { return t; } }
+    return t.startsWith('/') ? targetLabel(t) : t;
+  });
+  return Array.from(new Set(out)).join(' · ');
+}
+
 const TARGET_PRESETS = ['Sitewide', 'Homepage', 'All PDPs', 'All collections', 'Cart'];
 const TARGET_PREFIXES = ['PDP: ', 'Collection: ', 'LP: '];
 
@@ -271,7 +281,7 @@ function findConflicts(items: Initiative[], live: LiveTest[]): Map<string, Confl
 const ConflictCtx = createContext<Map<string, Conflict[]>>(new Map());
 const useConflicts = () => useContext(ConflictCtx);
 const conflictText = (cs: Conflict[]) =>
-  cs.map(c => `⚠️ Conflicts with ${c.other.kind === 'intelligems' ? 'live test' : ''} “${c.other.name}” on ${c.shared.join(', ')} (${shortDate(c.from)} – ${shortDate(c.to)})`).join('\n');
+  cs.map(c => `⚠️ Conflicts with ${c.other.kind === 'intelligems' ? 'live test' : ''} “${c.other.name}” on ${targetsShort(c.shared)} (${shortDate(c.from)} – ${shortDate(c.to)})`).join('\n');
 
 function ConflictNote({ id }: { id: string }) {
   const cs = useConflicts().get(id);
@@ -643,7 +653,7 @@ function MonthView({ monthKey, items, lists, liveTests, onUpdate, onOpen, onAdd 
             if (!overlaps(c.from, c.to, gridStart, gridEnd)) return;
             const k = [x.id, c.other.id].sort().join('|');
             if (seen.has(k)) return; seen.add(k);
-            pairs.push(`“${x.name}” ↔ ${c.other.kind === 'intelligems' ? '🔴 ' : ''}“${c.other.name}” on ${c.shared.join(', ')} (${shortDate(c.from)} – ${shortDate(c.to)})`);
+            pairs.push(`“${x.name}” ↔ ${c.other.kind === 'intelligems' ? '🔴 ' : ''}“${c.other.name}” on ${targetsShort(c.shared)} (${shortDate(c.from)} – ${shortDate(c.to)})`);
           }));
           if (!pairs.length) return null;
           return (
@@ -704,7 +714,10 @@ function MonthView({ monthKey, items, lists, liveTests, onUpdate, onOpen, onAdd 
                     {sl.start < gridStart && <span className="bar-arrow">‹</span>}
                     {cs && <span className="bar-lock">⚠️</span>}
                     <span className="bar-lock">🔴</span>
-                    <span className="bar-name">{sl.name}</span>
+                    <span className="bar-text">
+                      <span className="bar-name">{sl.name}</span>
+                      {sl.targets.length > 0 && <span className="bar-targets">🎯 {targetsShort(sl.targets)}</span>}
+                    </span>
                     {sl.end > gridEnd && <span className="bar-arrow">›</span>}
                   </a>
                 );
@@ -732,7 +745,10 @@ function MonthView({ monthKey, items, lists, liveTests, onUpdate, onOpen, onAdd 
                   {conflicts.has(item.id) && <span className="bar-lock" title={conflictText(conflicts.get(item.id)!)}>⚠️</span>}
                   {isTestItem(item) && !conflicts.has(item.id) && <span className="bar-lock" title={item.testTargeting ? `🧪 Targets: ${item.testTargeting}` : '🧪 A/B test — add Test Targeting in ClickUp to check for conflicts'}>🧪</span>}
                   <StatusDot color={item.statusColor} />
-                  <span className="bar-name">{item.name}</span>
+                  <span className="bar-text">
+                    <span className="bar-name">{item.name}</span>
+                    {item.testTargeting && <span className="bar-targets">🎯 {targetsShort(splitTargeting(item.testTargeting))}</span>}
+                  </span>
                   {item.bigSwing && <span className="chip-swing">★</span>}
                   <span className="bar-dates">{active ? `${shortDate(s)} – ${shortDate(e)}` : ''}</span>
                   <Avatars owners={item.owners} />
@@ -1179,7 +1195,7 @@ function TestsView({ data }: { data: { configured: boolean; tests: LiveTest[]; e
             {overlaps.length > 0 && (
               <div className="conflict-banner">
                 <strong>⚠️ Overlaps</strong>
-                <ul>{overlaps.map(c => <li key={c.other.id}>{c.other.kind === 'intelligems' ? 'Live test' : `Planned in ${c.other.where}`}: “{c.other.name}” on {c.shared.join(', ')} ({shortDate(c.from)} – {shortDate(c.to)})</li>)}</ul>
+                <ul>{overlaps.map(c => <li key={c.other.id}>{c.other.kind === 'intelligems' ? 'Live test' : `Planned in ${c.other.where}`}: “{c.other.name}” on {targetsShort(c.shared)} ({shortDate(c.from)} – {shortDate(c.to)})</li>)}</ul>
               </div>
             )}
             {t.results && <ResultsBlock r={t.results} />}
@@ -1585,7 +1601,7 @@ function DrawerConflicts({ id }: { id: string }) {
   return (
     <div className="conflict-banner" style={{ marginBottom: 14 }}>
       <strong>⚠️ Test conflict{cs.length > 1 ? 's' : ''}</strong>
-      <ul>{cs.map(c => <li key={c.other.id}>{c.other.kind === 'intelligems' ? '🔴 Live test ' : ''}“{c.other.name}” ({c.other.where}) also targets <strong>{c.shared.join(', ')}</strong> {shortDate(c.from)} – {shortDate(c.to)}{c.other.kind === 'intelligems' && c.other.url ? <> · <a href={c.other.url} target="_blank" rel="noreferrer">open ↗</a></> : null}</li>)}</ul>
+      <ul>{cs.map(c => <li key={c.other.id}>{c.other.kind === 'intelligems' ? '🔴 Live test ' : ''}“{c.other.name}” ({c.other.where}) also targets <strong>{targetsShort(c.shared)}</strong> {shortDate(c.from)} – {shortDate(c.to)}{c.other.kind === 'intelligems' && c.other.url ? <> · <a href={c.other.url} target="_blank" rel="noreferrer">open ↗</a></> : null}</li>)}</ul>
     </div>
   );
 }
