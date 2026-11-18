@@ -3,7 +3,8 @@ import { updateLearning, archiveLearning, cleanTags } from '@/lib/learnings';
 
 export const dynamic = 'force-dynamic';
 
-export async function PUT(req: NextRequest, { params }: { params: { id: string } }) {
+export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
+  const params = await ctx.params;
   try {
     const b = await req.json();
     const title = String(b.title || '').trim().slice(0, 200);
@@ -16,7 +17,8 @@ export async function PUT(req: NextRequest, { params }: { params: { id: string }
   }
 }
 
-export async function DELETE(_req: NextRequest, { params }: { params: { id: string } }) {
+export async function DELETE(_req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
+  const params = await ctx.params;
   try {
     await archiveLearning(params.id);
     return NextResponse.json({ ok: true });

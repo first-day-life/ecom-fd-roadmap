@@ -8,7 +8,8 @@ const ALLOWED: (keyof InitiativeInput)[] = ['name', 'status', 'priority', 'pilla
 // ClickUp's native task dates are read-only for this app.
 const FORBIDDEN = ['startDate', 'dueDate', 'start_date', 'due_date'];
 
-export async function PUT(req: NextRequest, { params }: { params: { id: string } }) {
+export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
+  const params = await ctx.params;
   try {
     const body = await req.json();
     const forbidden = FORBIDDEN.filter(k => k in body);
@@ -26,7 +27,8 @@ export async function PUT(req: NextRequest, { params }: { params: { id: string }
 }
 
 // DELETE — archives the ClickUp task (reversible from ClickUp), never hard-deletes
-export async function DELETE(_req: NextRequest, { params }: { params: { id: string } }) {
+export async function DELETE(_req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
+  const params = await ctx.params;
   try {
     await archiveInitiative(params.id);
     return NextResponse.json({ success: true });

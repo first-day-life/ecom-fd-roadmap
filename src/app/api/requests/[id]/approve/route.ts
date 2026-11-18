@@ -4,7 +4,8 @@ import { approveRequest, rejectRequest, verifyApproverPassword } from '@/lib/cli
 export const dynamic = 'force-dynamic';
 
 // POST — approve a request (removes the request tag so it shows on the roadmap)
-export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
+export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
+  const params = await ctx.params;
   try {
     const { password } = await req.json();
     if (!verifyApproverPassword(password)) {
@@ -18,7 +19,8 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
 }
 
 // DELETE — reject a request (archives the ClickUp task)
-export async function DELETE(req: NextRequest, { params }: { params: { id: string } }) {
+export async function DELETE(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
+  const params = await ctx.params;
   try {
     const { password } = await req.json();
     if (!verifyApproverPassword(password)) {
