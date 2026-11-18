@@ -313,6 +313,35 @@ function DropZone({ target, className = '', overClass = 'drop-over', style, chil
   );
 }
 
+/** Secondary actions, tucked into one menu to keep the header clean. */
+function MoreMenu({ onExport }: { onExport: () => void }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const close = (e: MouseEvent) => { if (!ref.current?.contains(e.target as Node)) setOpen(false); };
+    const esc = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
+    document.addEventListener('mousedown', close);
+    document.addEventListener('keydown', esc);
+    return () => { document.removeEventListener('mousedown', close); document.removeEventListener('keydown', esc); };
+  }, [open]);
+  return (
+    <div className="more-menu" ref={ref}>
+      <button className="btn btn-ghost" onClick={() => setOpen(o => !o)} aria-expanded={open} aria-haspopup="menu">More ▾</button>
+      {open && (
+        <div className="more-pop" role="menu" onClick={() => setOpen(false)}>
+          <Link href="/requests" role="menuitem">📨 Review requests</Link>
+          <Link href="/request" role="menuitem">✍️ Submit a request</Link>
+          <Link href="/accomplishments" role="menuitem">🏆 Accomplishments</Link>
+          <button role="menuitem" onClick={onExport}>⬇️ Export CSV</button>
+          <div className="more-sep" />
+          <Link href="/config" role="menuitem">⚙️ Settings &amp; connection</Link>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Misc helpers
 // ---------------------------------------------------------------------------
@@ -1744,24 +1773,30 @@ export default function RoadmapPage() {
       <div className="app">
         {pending > 0 && <div className="saving-indicator">Saving to ClickUp…</div>}
 
-        <div className="header">
+        <header className="header">
           <div className="header-left">
-            <h1>firstday.com — Roadmap</h1>
-            <p>
-              Synced with ClickUp · {meta?.lists.length || 0} lists
-              {meta?.mock && <span className="mock-badge">MOCK DATA</span>}
-            </p>
+            <span className="brand-mark" aria-hidden>◐</span>
+            <div>
+              <h1>Roadmap</h1>
+              <p>
+                firstday.com · synced with ClickUp
+                {meta?.mock && <span className="mock-badge">MOCK DATA</span>}
+              </p>
+            </div>
           </div>
+          <nav className="main-tabs" aria-label="Views">
+            {([['calendar', '🗓️', 'Calendar', 'Months and weeks'], ['backlog', '📥', 'Backlog', 'Every item in every list — plan into months'], ['list', '☰', 'List', 'Table of everything'], ['tests', '🧪', 'Tests', "Live Intelligems A/B tests and how long they've run"]] as const).map(([v, ico, label, hint]) => (
+              <button key={v} className={view === v ? 'active' : ''} onClick={() => setView(v)} title={hint}>
+                <span className="main-tab-ico" aria-hidden>{ico}</span>{label}
+              </button>
+            ))}
+          </nav>
           <div className="header-right">
-            <Link href="/requests" className="btn btn-ghost btn-sm">Requests</Link>
-            <Link href="/request" className="btn btn-ghost btn-sm">Submit request</Link>
-            <Link href="/accomplishments" className="btn btn-ghost btn-sm">Accomplishments</Link>
-            <Link href="/config" className="btn btn-ghost btn-sm" title="Configuration">⚙</Link>
-            <button className="btn btn-ghost btn-sm" onClick={() => exportCSV(scoped)}>↓ CSV</button>
-            {meta && <button className="btn btn-primary btn-sm" onClick={() => setAddDefaults(month ? monthWeeks(month) : {})}>+ Add</button>}
+            {meta && <button className="btn btn-primary" onClick={() => setAddDefaults(month ? monthWeeks(month) : {})}>＋ New item</button>}
+            <MoreMenu onExport={() => exportCSV(scoped)} />
             <AuthStatus />
           </div>
-        </div>
+        </header>
 
         {error && (
           <div className="error-banner">
@@ -1770,7 +1805,7 @@ export default function RoadmapPage() {
           </div>
         )}
 
-        <div className="month-window">
+        {(view === 'calendar' || view === 'list') && <div className="month-window">
           <div className="month-window-left">
             <nav className="crumbs">
               <button className={`crumb ${!month ? 'crumb-active' : ''}`} onClick={() => navigate({ from, span, month: null })} title="Back to the overview">{month ? '‹ Overview' : windowLabel}</button>
@@ -1784,20 +1819,15 @@ export default function RoadmapPage() {
                 {SPANS.map(n => <button key={n} className={span === n ? 'active' : ''} onClick={() => navigate({ from, span: n, month: null })} title={`Show ${n} months`}>{n}M</button>)}
               </div>
             )}
-            <span className="month-window-range">{scoped.length} items · {pct}% done</span>
+            <span className="month-window-range">
+              <span className="mini-progress" aria-hidden><span style={{ width: `${pct}%` }} /></span>
+              {scoped.length} items · {pct}% done
+            </span>
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <button className={`btn btn-ghost btn-sm ${activeFilters ? 'btn-on' : ''}`} onClick={() => setShowFilters(s => !s)}>
-              Filters{activeFilters ? ` (${activeFilters})` : ''}
-            </button>
-            <div className="view-toggle" style={{ marginLeft: 0 }}>
-              <button className={view === 'calendar' ? 'active' : ''} onClick={() => setView('calendar')}>Calendar</button>
-              <button className={view === 'list' ? 'active' : ''} onClick={() => setView('list')}>List</button>
-              <button className={view === 'backlog' ? 'active' : ''} onClick={() => setView('backlog')} title="Every item in every list — plan into months">Backlog</button>
-              <button className={view === 'tests' ? 'active' : ''} onClick={() => setView('tests')} title="Live Intelligems A/B tests and how long they've run">🧪 Tests</button>
-            </div>
-          </div>
-        </div>
+          <button className={`btn btn-ghost btn-sm ${activeFilters ? 'btn-on' : ''}`} onClick={() => setShowFilters(s => !s)}>
+            ⚲ Filters{activeFilters ? ` · ${activeFilters}` : ''}
+          </button>
+        </div>}
 
         {(showFilters || view === 'backlog') && view !== 'tests' && meta && (
           <div className="filters">
