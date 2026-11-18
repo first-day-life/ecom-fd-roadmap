@@ -1339,6 +1339,34 @@ function Md({ text, className }: { text: string; className?: string }) {
   return <div className={`md ${className || ''}`}>{blocks}</div>;
 }
 
+/**
+ * End date (YYYY-MM-DD) of a test from its free-text Dates field. Handles "4/1 – 4/7/2026", "8/25 - 9/4",
+ * "9.15.26", "Nov 2–14, 2026", "Oct 20 – Nov 3, 2026". Year: written year, else the quarter's, else this year.
+ */
+const MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+function testEndDate(l: Learning): string {
+  const text = l.dates || '';
+  const found: Array<{ m: number; d: number; y?: number }> = [];
+  const re = /(\d{1,2})[\/.](\d{1,2})(?:[\/.](\d{2,4}))?|\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+(\d{1,2})(?:\s*[–\-]\s*(\d{1,2})\b(?!\s*[\/.]))?/gi;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text))) {
+    if (m[1]) {
+      const y = m[3] ? Number(m[3].length === 2 ? '20' + m[3] : m[3]) : undefined;
+      found.push({ m: Number(m[1]), d: Number(m[2]), y });
+    } else {
+      const mon = MONTHS.indexOf(m[4].toLowerCase().slice(0, 3)) + 1;
+      found.push({ m: mon, d: Number(m[5]) });
+      if (m[6]) found.push({ m: mon, d: Number(m[6]) });
+    }
+  }
+  const last = found[found.length - 1];
+  if (!last || last.m < 1 || last.m > 12 || last.d < 1 || last.d > 31) return '';
+  const written = text.match(/\b(20\d{2})\b/);
+  const year = last.y || (written ? Number(written[1]) : 0) || Number((l.quarter.match(/^(\d{4})/) || [])[1]) || new Date().getFullYear();
+  return `${year}-${String(last.m).padStart(2, '0')}-${String(last.d).padStart(2, '0')}`;
+}
+const RECENT_CHOICES = [7, 30] as const;
+
 const emptyDraft = (): LearningDraft => ({
   title: '', outcome: '', quarter: '', rollout: '', pageType: [], lever: [], product: [], metric: [],
   dates: '', hypothesis: '', result: '', learning: '', nextSteps: '', slide: '', intelligems: '', intelligemsResults: '',
@@ -1418,6 +1446,7 @@ function LearningsView() {
   const [sel, setSel] = useState<Partial<Record<FilterKey, string[]>>>({});
   const [editing, setEditing] = useState<string | null>(null);   // 'new' | id | null
   const [openIds, setOpenIds] = useState<Set<string>>(new Set());
+  const [recent, setRecent] = useState<number>(0);   // 0 = any time, else ended within the last N days
 
   const load = useCallback(async () => {
     try {
@@ -1430,17 +1459,24 @@ function LearningsView() {
   }, []);
   useEffect(() => { load(); }, [load]);
 
-  const activeCount = Object.values(sel).reduce((n, v) => n + (v?.length || 0), 0);
+  const activeCount = Object.values(sel).reduce((n, v) => n + (v?.length || 0), 0) + (recent ? 1 : 0);
   const matchesSearch = (l: Learning) => {
     const words = q.toLowerCase().split(/\s+/).filter(Boolean);
     if (!words.length) return true;
     const hay = [l.title, l.learning, l.result, l.hypothesis, l.nextSteps, l.dates, l.notes, ...FILTER_GROUPS.flatMap(g => valuesOf(l, g.key))].join(' ').toLowerCase();
     return words.every(w => hay.includes(w));
   };
-  const matchesFilters = (l: Learning, skip?: FilterKey) =>
+  const isRecent = (l: Learning, days: number) => {
+    const end = testEndDate(l);
+    if (!end) return false;
+    const today = todayStr();
+    return end <= today && end >= addDays(today, -days);
+  };
+  const matchesFilters = (l: Learning, skip?: FilterKey | 'recent') =>
+    (skip === 'recent' || !recent || isRecent(l, recent)) &&
     FILTER_GROUPS.every(({ key }) => key === skip || !sel[key]?.length || valuesOf(l, key).some(v => sel[key]!.includes(v)));
 
-  const shown = useMemo(() => (items || []).filter(l => matchesSearch(l) && matchesFilters(l)), [items, q, sel]);   // eslint-disable-line react-hooks/exhaustive-deps
+  const shown = useMemo(() => (items || []).filter(l => matchesSearch(l) && matchesFilters(l)), [items, q, sel, recent]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   /** Counts per option, given every OTHER active filter (so counts show what clicking would give). */
   const countsFor = (key: FilterKey) => {
@@ -1479,6 +1515,18 @@ function LearningsView() {
       </div>
 
       <div className="learn-filters">
+        <div className="learn-filter-row">
+          <span className="learn-filter-label" title="When the test ended, from its Dates field">Ran</span>
+          <div className="learn-filter-chips">
+            {RECENT_CHOICES.map(d => {
+              const n = (items || []).filter(l => matchesSearch(l) && matchesFilters(l, 'recent') && isRecent(l, d)).length;
+              return (
+                <button key={d} className={`learn-tag k-recent ${recent === d ? 'on' : ''}`} aria-pressed={recent === d} onClick={() => setRecent(recent === d ? 0 : d)}
+                  title={`Tests that ended in the last ${d} days`}>🕒 Last {d} days <span>{n}</span></button>
+              );
+            })}
+          </div>
+        </div>
         {FILTER_GROUPS.map(({ key, label }) => {
           const counts = countsFor(key);
           const opts = options[key].length ? options[key] : Array.from(counts.keys()).sort();
@@ -1498,7 +1546,7 @@ function LearningsView() {
           );
         })}
         {(activeCount > 0 || q) && (
-          <div className="learn-filter-row"><span className="learn-filter-label" /><button className="btn btn-ghost btn-sm" onClick={() => { setSel({}); setQ(''); }}>Clear filters{activeCount ? ` (${activeCount})` : ''}</button>
+          <div className="learn-filter-row"><span className="learn-filter-label" /><button className="btn btn-ghost btn-sm" onClick={() => { setSel({}); setQ(''); setRecent(0); }}>Clear filters{activeCount ? ` (${activeCount})` : ''}</button>
             <span className="res-dim" style={{ fontSize: 12 }}>{shown.length} of {items.length}</span></div>
         )}
       </div>
