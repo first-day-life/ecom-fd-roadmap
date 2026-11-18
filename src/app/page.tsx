@@ -2014,6 +2014,9 @@ export default function RoadmapPage() {
     <ScheduleCtx.Provider value={scheduleTo}>
       <div className="app">
         {pending > 0 && <div className="saving-indicator">Saving to ClickUp…</div>}
+        {tests === null && (
+          <div className="bg-loading" role="status" aria-live="polite"><span className="bg-spinner" />Loading live Intelligems tests…</div>
+        )}
 
         <header className="header">
           <div className="header-left">
