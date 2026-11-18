@@ -885,7 +885,7 @@ function BacklogView({ items, meta, onOpen, onSchedule, onUpdate, onOpenMonth }:
   const lists = meta.lists;
   const nowYm = todayStr().slice(0, 7);
   const months = Array.from({ length: 12 }, (_, i) => shiftMonth(nowYm, i));
-  const [show, setShow] = useState<'unplanned' | 'open' | 'all'>('open');
+  const [show, setShow] = useState<'unplanned' | 'open' | 'all'>('unplanned');
   const [sort, setSortState] = useState<SortKey>('smart');
   useEffect(() => {
     try { const v = localStorage.getItem(SORT_KEY) as SortKey | null; if (v && v in SORT_LABELS) setSortState(v); } catch { /* ignore */ }
@@ -932,9 +932,9 @@ function BacklogView({ items, meta, onOpen, onSchedule, onUpdate, onOpenMonth }:
 
       <div className="backlog-tools">
         <div className="view-toggle" style={{ marginLeft: 0 }}>
-          <button className={show === 'unplanned' ? 'active' : ''} onClick={() => setShow('unplanned')}>Unplanned</button>
-          <button className={show === 'open' ? 'active' : ''} onClick={() => setShow('open')}>All open</button>
-          <button className={show === 'all' ? 'active' : ''} onClick={() => setShow('all')}>Everything</button>
+          <button className={show === 'unplanned' ? 'active' : ''} onClick={() => setShow('unplanned')} title="Open items with no dates yet">Unplanned <span className="count-badge">{items.filter(i => !i.done && sourceOf(i) === 'none').length}</span></button>
+          <button className={show === 'open' ? 'active' : ''} onClick={() => setShow('open')} title="Everything not done, planned or not">All open <span className="count-badge">{items.filter(i => !i.done).length}</span></button>
+          <button className={show === 'all' ? 'active' : ''} onClick={() => setShow('all')} title="Including done">Everything <span className="count-badge">{items.length}</span></button>
         </div>
         <select className={`filter-select ${sort !== 'smart' ? 'filter-on' : ''}`} value={sort} onChange={e => setSort(e.target.value as SortKey)} title="Sort cards within each list"
           style={{ width: 'auto', maxWidth: 'none' }}>
