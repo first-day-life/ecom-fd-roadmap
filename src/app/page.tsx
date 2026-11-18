@@ -97,6 +97,17 @@ function isTestItem(i: Initiative): boolean {
 const EVERYTHING = new Set(['sitewide', 'site-wide', 'all', '*', 'global', 'everything']);
 const slug = (x: string) => x.trim().replace(/\s+/g, '-');
 
+/** Team shorthand for key pages (URLs confirmed from past Intelligems tests). Matching ignores case and spaces/dashes. */
+const PAGE_ALIASES: Record<string, string> = {
+  'broad pdps': '/products', 'broad pdp': '/products',
+  'kde pdp': '/products/kids-enrichment-vitamin',
+  'tdk pdp': '/products/teens-kickstart-vitamin',
+  'kde bts': '/pages/kde-behind-the-science-lp',
+  'tdk bts': '/pages/tdk-behind-the-science-lp',
+};
+const aliasKey = (x: string) => x.toLowerCase().replace(/[\s_-]+/g, ' ').trim();
+const ALIAS_BY_PATH: Record<string, string> = { '/pages/kde-behind-the-science-lp': 'KDE-BTS', '/pages/tdk-behind-the-science-lp': 'TDK-BTS', '/products/kids-enrichment-vitamin': 'KDE-PDP', '/products/teens-kickstart-vitamin': 'TDK-PDP' };
+
 /**
  * Normalize one target and add path aliases for common shorthand:
  *   "Homepage …" → "/" · "PDP: x" → "/products/x" · "PDP" → "/products"
@@ -111,6 +122,7 @@ function normTargets(raw: string): string[] {
     .replace(/(.)\/$/, '$1');
   if (!t) return [];
   const out = new Set([t]);
+  if (PAGE_ALIASES[aliasKey(t)]) out.add(PAGE_ALIASES[aliasKey(t)]);
   let m: RegExpMatchArray | null;
   if (t === '/' || /^(homepage|home page|home)\b/.test(t)) out.add('/');
   if ((m = t.match(/^(pdp|pdps|product|products)\s*[:\-–]\s*(.+)$/))) out.add('/products/' + slug(m[2]));
@@ -127,6 +139,7 @@ const splitTargeting = (s: string) => s.split(/[,;\n]+/).map(x => x.trim()).filt
 /** Path → the shorthand people type in ClickUp ("/products/x" → "PDP: x"). */
 function targetLabel(path: string): string {
   if (path === '/') return 'Homepage';
+  if (ALIAS_BY_PATH[path]) return ALIAS_BY_PATH[path];
   if (path === '/products') return 'All PDPs';
   if (path === '/collections') return 'All collections';
   if (path === '/cart') return 'Cart';
@@ -147,7 +160,7 @@ function targetsShort(raw: string[]): string {
   return Array.from(new Set(out)).join(' · ');
 }
 
-const TARGET_PRESETS = ['Sitewide', 'Homepage', 'All PDPs', 'All collections', 'Cart'];
+const TARGET_PRESETS = ['Homepage', 'Sitewide', 'Broad-PDPs', 'KDE-PDP', 'TDK-PDP', 'KDE-BTS', 'TDK-BTS', '/pages/sale'];
 const TARGET_PREFIXES = ['PDP: ', 'Collection: ', 'LP: '];
 
 /** Suggestions for the targeting editor: values already used in ClickUp + pages live Intelligems tests target. */
@@ -236,7 +249,7 @@ function sharedTargets(a: string[], b: string[]): string[] {
     else if (y.startsWith('~') && !x.startsWith('~') && x.includes(y.slice(1))) out.add(x);
     else if (x.startsWith('/') && y.startsWith('/') && x !== '/' && y !== '/' && (x.startsWith(y + '/') || y.startsWith(x + '/'))) out.add(x.length < y.length ? x : y);
   }
-  return Array.from(out).map(t => (t.startsWith('~') ? `URLs containing “${t.slice(1)}”` : t === '/' ? 'homepage (/)' : t));
+  return Array.from(out);   // shown via targetsShort
 }
 
 /** Something that occupies a page/area for a period: a ClickUp test task or a live Intelligems test. */
