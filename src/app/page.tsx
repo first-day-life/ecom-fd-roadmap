@@ -1504,6 +1504,25 @@ function LearningsView() {
   };
   const toggleOpen = (id: string) => setOpenIds(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
 
+  // Pull final results of recently ended Intelligems tests (also runs hourly on its own)
+  const [syncing, setSyncing] = useState(false);
+  const [syncMsg, setSyncMsg] = useState('');
+  const syncNow = async () => {
+    setSyncing(true); setSyncMsg('');
+    try {
+      const r = await fetch('/api/sync/intelligems', { method: 'POST' });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || 'Sync failed');
+      const made = j.actions.filter((a: any) => a.action === 'create').length;
+      const upd = j.actions.filter((a: any) => a.action === 'update').length;
+      setSyncMsg(made || upd
+        ? `Added ${made} and updated ${upd} from tests that ended in the last ${j.days} days.`
+        : `Up to date: ${j.checked} test${j.checked === 1 ? '' : 's'} ended in the last ${j.days} days, all already have final results.`);
+      if (made || upd) await load();
+    } catch (e: any) { setSyncMsg('⚠ ' + e.message); }
+    setSyncing(false);
+  };
+
   if (!items) return <div className="loading-screen" style={{ minHeight: '30vh' }}><div className="spinner" /></div>;
 
   return (
@@ -1511,8 +1530,13 @@ function LearningsView() {
       {error && <div className="error-banner"><span>⚠</span> {error}</div>}
       <div className="learn-toolbar">
         <input className="learn-search" type="search" value={q} onChange={e => setQ(e.target.value)} placeholder={`Search ${items.length} learning${items.length === 1 ? '' : 's'} — title, learning, result, hypothesis…`} />
+        <button className="btn btn-sm" onClick={syncNow} disabled={syncing}
+          title="Write the final results of Intelligems tests that ended in the last 14 days into their learnings (creates one if missing). Also runs every hour on its own.">
+          {syncing ? 'Checking…' : '↻ Pull ended tests'}
+        </button>
         {editing !== 'new' && <button className="btn btn-primary btn-sm" onClick={() => setEditing('new')}>＋ Add learning</button>}
       </div>
+      {syncMsg && <div className="learn-sync-msg" role="status">{syncMsg} <button className="btn-link" onClick={() => setSyncMsg('')} aria-label="Dismiss">✕</button></div>}
 
       <div className="learn-filters">
         <div className="learn-filter-row">

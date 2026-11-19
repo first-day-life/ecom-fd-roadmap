@@ -25,6 +25,18 @@ Custom fields are matched **by name** on each list, ignoring case and emoji, so 
 
 The **🧪 Tests** tab lists live and paused Intelligems A/B tests, longest-running first, with days running, Intelligems' estimated test length and the traffic split. It reads from the Intelligems External API (`GET /v25-10-beta/experiences-list`, read-only, cached 5 min). Set `INTELLIGEMS_API_KEY` (Intelligems → Integrations → Intelligems External API → Enable).
 
+### Ended tests → Learnings (automatic)
+
+Every hour (`netlify/functions/sync-ended-tests.mjs`, a Netlify scheduled function) the app checks Intelligems for tests that **ended in the last 14 days** and writes their final results into the **🧪 Test Learnings** list (`src/lib/igSync.ts`):
+
+- If a learning for the test exists (matched by its `app.intelligems.io/experiment/<id>` link, or a title containing the test name), it fills **only empty fields** and adds a **Final results · Intelligems** block under the Result field.
+- If none exists, it creates one with dates, quarter, outcome, significant metrics, a page/product guess, the Intelligems link and the results block. A person adds the hypothesis, learning and next steps.
+- A learning that already has the block, or that someone archived, is left alone, so repeat runs change nothing.
+
+Learnings → **↻ Pull ended tests** runs it on demand, and `GET /api/sync/intelligems` previews it without writing. The scheduled call authenticates with a key derived from `CLICKUP_API_TOKEN`, so there's no extra secret. It only writes to the learnings list, never to roadmap tasks or dates.
+
+New slides in the CRO Learnings deck are added by a Claude Desktop scheduled task: see [docs/deck-sync-prompt.md](docs/deck-sync-prompt.md).
+
 ## Run locally
 
 ```bash

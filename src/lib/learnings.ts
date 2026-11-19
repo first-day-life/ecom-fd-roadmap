@@ -203,13 +203,14 @@ async function assertLearning(id: string, lid: string): Promise<any> {
   return t;
 }
 
-export async function getLearnings(): Promise<{ learnings: Learning[]; options: LearningOptions }> {
-  if (mock()) return { learnings: [...mockStore()].sort((a, b) => b.createdAt.localeCompare(a.createdAt)), options: MOCK_OPTIONS };
+/** All learnings. `archived: true` returns the archived ones instead (used by the sync so it never re-creates an entry someone archived). */
+export async function getLearnings(opts: { archived?: boolean } = {}): Promise<{ learnings: Learning[]; options: LearningOptions }> {
+  if (mock()) return { learnings: opts.archived ? [] : [...mockStore()].sort((a, b) => b.createdAt.localeCompare(a.createdAt)), options: MOCK_OPTIONS };
   const id = await listId();
   const map = await fieldDefs(id);
   const out: Learning[] = [];
   for (let page = 0; page < 20; page++) {
-    const res = await cu<{ tasks: any[]; last_page?: boolean }>(`/list/${id}/task?page=${page}&include_closed=true&subtasks=false&include_markdown_description=true`);
+    const res = await cu<{ tasks: any[]; last_page?: boolean }>(`/list/${id}/task?page=${page}&include_closed=true&subtasks=false&include_markdown_description=true${opts.archived ? '&archived=true' : ''}`);
     out.push(...(res.tasks || []).map(t => fromTask(t, map)));
     if (res.last_page || !(res.tasks || []).length) break;
   }

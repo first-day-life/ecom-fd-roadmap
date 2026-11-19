@@ -219,7 +219,7 @@ export function evaluate(raw: any, runtimeDays: number): TestResults {
   return { call: 'not_ready', headline: eta ? `⏳ Not ready — about ${eta} more day${eta === 1 ? '' : 's'}` : '⏳ Not ready', reasons, variants, etaDays: eta, igVerdict, estMonthlyImpact };
 }
 
-async function fetchResults(key: string, id: string, runtimeDays: number): Promise<TestResults> {
+export async function fetchResults(key: string, id: string, runtimeDays: number): Promise<TestResults> {
   try {
     const res = await fetch(`${API}/analytics/resource/${id}`, {
       method: 'POST',                                   // read-only analytics query (POST carries the query body)
@@ -261,7 +261,7 @@ function mapTest(e: any): LiveTest | null {
   };
 }
 
-async function fetchStatus(key: string, status: 'started' | 'paused'): Promise<any[]> {
+async function fetchStatus(key: string, status: 'started' | 'paused' | 'ended'): Promise<any[]> {
   const out: any[] = [];
   for (let page = 1; page <= 5; page++) {
     const res = await fetch(`${API}/experiences-list?status=${status}&category=experiment&limit=50&page=${page}`, {
@@ -338,3 +338,36 @@ export async function getLiveTests(): Promise<LiveTest[]> {
   cache = { at: Date.now(), tests };
   return tests;
 }
+
+export interface EndedTest {
+  id: string;
+  name: string;
+  startedAt: string;   // ISO
+  endedAt: string;     // ISO
+  days: number;        // whole days it ran
+  targets: string[];
+  resultsUrl: string;  // app.intelligems.io link — the same form the learnings use
+}
+
+/** Tests that ended in the last `days` days, newest first (read-only). */
+export async function getEndedTests(days: number): Promise<EndedTest[]> {
+  const key = process.env.INTELLIGEMS_API_KEY || '';
+  if (!key) throw new Error('INTELLIGEMS_API_KEY is not set');
+  const since = Date.now() - days * 86400000;
+  const out: EndedTest[] = [];
+  for (const e of await fetchStatus(key, 'ended')) {
+    const startedAt = toIso(e.startedAtTs), endedAt = toIso(e.endedAtTs);
+    if (!startedAt || !endedAt || new Date(endedAt).getTime() < since) continue;
+    out.push({
+      id: String(e.id),
+      name: String(e.name || 'Untitled test').trim(),
+      startedAt, endedAt,
+      days: Math.max(1, Math.round((new Date(endedAt).getTime() - new Date(startedAt).getTime()) / 86400000)),
+      targets: targetsFor(e),
+      resultsUrl: `https://app.intelligems.io/experiment/${e.id}`,
+    });
+  }
+  return out.sort((a, b) => b.endedAt.localeCompare(a.endedAt));
+}
+
+export function intelligemsKey(): string { return process.env.INTELLIGEMS_API_KEY || ''; }

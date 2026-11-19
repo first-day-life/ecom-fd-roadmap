@@ -17,6 +17,7 @@
 //   IDENTITY_URL           override the Identity endpoint (default: <site>/.netlify/identity) — for testing
 
 import { NextRequest, NextResponse } from 'next/server';
+import { validSyncKey } from '@/lib/syncKey';
 
 const AT = 'rm_at';                 // Identity access token (JWT, ~1h)
 const RT = 'rm_rt';                 // Identity refresh token
@@ -193,6 +194,14 @@ export async function middleware(req: NextRequest) {
     const res = NextResponse.redirect(new URL('/', req.url));
     clearSession(res);
     return res;
+  }
+
+  // Scheduled sync (Netlify function): a key derived from the ClickUp token stands in for a sign-in
+  if (pathname.startsWith('/api/sync/') && req.headers.get('x-sync-key')) {
+    if (!(await validSyncKey(req.headers.get('x-sync-key')))) return NextResponse.json({ error: 'Bad sync key' }, { status: 401 });
+    const headers = new Headers(req.headers);
+    headers.set('x-roadmap-user', 'scheduled-sync');
+    return NextResponse.next({ request: { headers } });
   }
 
   // Normal request: check (and if needed refresh) the session
