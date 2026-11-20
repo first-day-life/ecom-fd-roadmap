@@ -570,9 +570,16 @@ function MonthView({ monthKey, items, lists, liveTests, onUpdate, onOpen, onAdd 
   const [trayList, setTrayList] = useState('');
   const [trayOpenOnly, setTrayOpenOnly] = useState(true);
   const [groupByList, setGroupByList] = useState(true);
+  const [hideDone, setHideDoneState] = useState(false);
+  useEffect(() => {
+    try { if (localStorage.getItem('roadmap.calendar.hideDone') === '1') setHideDoneState(true); } catch { /* storage unavailable */ }
+  }, []);
+  const setHideDone = (v: boolean) => { setHideDoneState(v); try { localStorage.setItem('roadmap.calendar.hideDone', v ? '1' : '0'); } catch { /* ignore */ } };
 
   const monthItems = items.filter(i => inMonth(i, monthKey));
   const dated = monthItems.filter(i => { const sp = spanOf(i); return sp && overlaps(sp.start, sp.end, gridStart, gridEnd); });
+  const doneInView = dated.filter(i => i.done).length;
+  const shown = hideDone ? dated.filter(i => !i.done) : dated;
   const liveInMonth = liveSlots(liveTests).filter(s => overlaps(s.start, s.end, gridStart, gridEnd));
   const unplanned = items.filter(i => sourceOf(i) === 'none' && !i.done);
   const traySource = tray === 'unplanned' ? unplanned : items.filter(i => !trayOpenOnly || !i.done);
@@ -633,13 +640,13 @@ function MonthView({ monthKey, items, lists, liveTests, onUpdate, onOpen, onAdd 
   const rows: Row[] = [];
   if (groupByList) {
     for (const l of lists) {
-      const its = dated.filter(i => i.listId === l.id).sort((a, b) => sortKey(a).localeCompare(sortKey(b)));
+      const its = shown.filter(i => i.listId === l.id).sort((a, b) => sortKey(a).localeCompare(sortKey(b)));
       if (!its.length) continue;
       rows.push({ kind: 'group', label: l.name, color: listColor(l.id), n: its.length });
       its.forEach(item => rows.push({ kind: 'item', item }));
     }
   } else {
-    [...dated].sort((a, b) => sortKey(a).localeCompare(sortKey(b))).forEach(item => rows.push({ kind: 'item', item }));
+    [...shown].sort((a, b) => sortKey(a).localeCompare(sortKey(b))).forEach(item => rows.push({ kind: 'item', item }));
   }
   if (liveInMonth.length) {
     rows.push({ kind: 'group', label: '🧪 Live in Intelligems', color: '#ef4444', n: liveInMonth.length });
@@ -678,6 +685,7 @@ function MonthView({ monthKey, items, lists, liveTests, onUpdate, onOpen, onAdd 
         })()}
         <div className="month-view-tools">
           <label className="tray-check"><input type="checkbox" checked={groupByList} onChange={e => setGroupByList(e.target.checked)} /> Group by list</label>
+          <label className="tray-check" title="Hide finished items from the calendar (still counted in the progress stats)"><input type="checkbox" checked={hideDone} onChange={e => setHideDone(e.target.checked)} /> Hide done{doneInView ? ` (${doneInView})` : ''}</label>
           <span className="month-view-hint">Drag a bar to move it by week · drag its edges to add or remove weeks · drop items from the sidebar onto a week · 🔒 = dates set on the ClickUp task (change them in ClickUp)</span>
         </div>
 
